@@ -22,9 +22,15 @@ import { ensureValidBinary } from './lib/services/ensureValidBinary.js';
 // jobs run.  ensureValidBinary() also detects and auto-heals partial extractions
 // (e.g. a newer version that was downloaded but only the chrome executable was
 // written) so Chrome never crashes with "Invalid file descriptor to ICU data".
-logger.info('Checking CloakBrowser binary...');
-await ensureValidBinary();
-logger.info('CloakBrowser binary ready.');
+// paris-hunter: API-only deploys (providers with getListings) never launch a browser,
+// so the 140MB Chromium download can be skipped entirely via FREDY_SKIP_CHROMIUM=true.
+if (process.env.FREDY_SKIP_CHROMIUM !== 'true') {
+  logger.info('Checking CloakBrowser binary...');
+  await ensureValidBinary();
+  logger.info('CloakBrowser binary ready.');
+} else {
+  logger.info('FREDY_SKIP_CHROMIUM=true — skipping CloakBrowser download (API-only providers).');
+}
 
 //in the config, we store the path of the sqlite file, thus we must check if it is available
 const isConfigAccessible = await checkIfConfigIsAccessible();
