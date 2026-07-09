@@ -8,10 +8,12 @@
  *
  * What it does (and deliberately does NOT do):
  *   - NEVER creates the bucket — it is user-owned. HeadBucket must succeed or we abort.
- *   - MERGES lifecycle rules: every pre-existing rule is preserved verbatim; we only
- *     upsert OUR rule (ID 'ph-attachments-30d'), scoped to Filter.Prefix 'attachments/'
- *     so it can never expire foreign objects in the bucket.
- *   - Adds NoncurrentVersionExpiration (30 days) to our rule iff bucket versioning is enabled.
+ *   - MERGES lifecycle rules: every foreign pre-existing rule is preserved verbatim; we
+ *     upsert OUR rule (ID 'ph-attachments-180d'), scoped to Filter.Prefix 'attachments/'
+ *     so it can never expire foreign objects in the bucket. Any other 'ph-attachments-*'
+ *     rule (e.g. the superseded 'ph-attachments-30d') is OURS and is REMOVED on apply —
+ *     otherwise both rules would coexist and the shorter expiry would win.
+ *   - Adds NoncurrentVersionExpiration (180 days) to our rule iff bucket versioning is enabled.
  *
  * Credentials (see docs/DEPLOY.md, "Credential split"):
  *   - Uses SCW_LIFECYCLE_ACCESS_KEY / SCW_LIFECYCLE_SECRET_KEY when BOTH are set
@@ -34,12 +36,15 @@ import {
   PutBucketLifecycleConfigurationCommand,
 } from '@aws-sdk/client-s3';
 
-export const PH_RULE_ID = 'ph-attachments-30d';
+export const PH_RULE_ID_PREFIX = 'ph-attachments-'; // every rule with this ID prefix is OURS (past or present)
+export const PH_RULE_ID = 'ph-attachments-180d';
 export const PH_PREFIX = 'attachments/';
-export const RETENTION_DAYS = 30;
+export const RETENTION_DAYS = 180;
 
 /**
- * Pure merge: keep every existing rule, upsert only ours (matched by ID).
+ * Pure merge: keep every foreign rule verbatim, upsert ours. Any rule whose ID starts
+ * with 'ph-attachments-' is treated as ours and replaced — this removes superseded
+ * variants (e.g. the old 'ph-attachments-30d') so the shorter expiry cannot win.
  * @param {Array<object>} existingRules rules currently on the bucket (may be empty)
  * @param {boolean} versioningEnabled whether bucket versioning is Enabled
  * @returns {Array<object>} merged rule set to PUT
@@ -52,14 +57,15 @@ export const mergeLifecycleRules = (existingRules, versioningEnabled) => {
     Expiration: { Days: RETENTION_DAYS },
     ...(versioningEnabled ? { NoncurrentVersionExpiration: { NoncurrentDays: RETENTION_DAYS } } : {}),
   };
-  const kept = (existingRules ?? []).filter((rule) => rule?.ID !== PH_RULE_ID);
+  const kept = (existingRules ?? []).filter((rule) => !String(rule?.ID ?? '').startsWith(PH_RULE_ID_PREFIX));
   return [...kept, phRule];
 };
 
 const usage = () => {
   console.log('Usage: node --env-file-if-exists=.env tools/paris-hunter/setup-bucket.js [--dry-run|--help]');
-  console.log('Idempotent: sets lifecycle rule ph-attachments-30d (prefix attachments/, 30d) on the');
-  console.log('user-owned Scaleway bucket, MERGING with existing rules. Never creates the bucket.');
+  console.log('Idempotent: sets lifecycle rule ph-attachments-180d (prefix attachments/, 180d) on the');
+  console.log('user-owned Scaleway bucket, MERGING with existing rules (superseded ph-attachments-*');
+  console.log('rules are replaced; foreign rules preserved). Never creates the bucket.');
 };
 
 const resolveCredentials = (env) => {
@@ -143,9 +149,12 @@ const main = async () => {
   const after = await client.send(new GetBucketLifecycleConfigurationCommand({ Bucket: bucket }));
   console.log('Lifecycle configuration now on the bucket:');
   console.log(JSON.stringify(after.Rules, null, 2));
-  const ours = (after.Rules ?? []).find((rule) => rule.ID === PH_RULE_ID);
-  if (!ours) {
-    console.error('ERROR: our rule is missing after PUT — investigate before relying on retention.');
+  const ourRules = (after.Rules ?? []).filter((rule) => String(rule?.ID ?? '').startsWith(PH_RULE_ID_PREFIX));
+  if (ourRules.length !== 1 || ourRules[0].ID !== PH_RULE_ID) {
+    console.error(
+      `ERROR: expected exactly one '${PH_RULE_ID_PREFIX}*' rule ('${PH_RULE_ID}') after PUT, ` +
+        `got: ${ourRules.map((r) => r.ID).join(', ') || '(none)'} — investigate before relying on retention.`,
+    );
     process.exit(1);
   }
   console.log(`OK: rule '${PH_RULE_ID}' active (prefix '${PH_PREFIX}', ${RETENTION_DAYS} days).`);
