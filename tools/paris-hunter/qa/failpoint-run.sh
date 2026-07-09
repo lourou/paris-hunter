@@ -85,17 +85,31 @@ server_env() {
   printf '%s\n' "${env_vars[@]}"
 }
 
-start_server() { # $1=failpoint-or-empty $2=logfile -> echoes pid
+start_server() { # $1=failpoint-or-empty $2=logfile -> sets STARTED_PID
   local envs=()
   while IFS= read -r line; do envs+=("$line"); done < <(server_env "$1")
   (cd "$REPO_ROOT" && exec env "${envs[@]}" node --env-file-if-exists=.env index.js) >"$2" 2>&1 &
-  echo $!
+  STARTED_PID=$!
+}
+
+wait_for_server_exit() {
+  local pid="$1" timeout="${2:-60}" start
+  start=$(date +%s)
+  while jobs -pr | grep -qx "$pid"; do
+    if [ $(($(date +%s) - start)) -ge "$timeout" ]; then return 1; fi
+    sleep 1
+  done
+  wait "$pid" 2>/dev/null || true
+  return 0
 }
 
 stop_server() {
   local pid="$1"
   kill "$pid" 2>/dev/null || true
-  ph_wait_for_exit "$pid" 15 || kill -9 "$pid" 2>/dev/null || true
+  wait_for_server_exit "$pid" 15 || {
+    kill -9 "$pid" 2>/dev/null || true
+    wait_for_server_exit "$pid" 5 || true
+  }
 }
 
 declare -a RESULTS=()
@@ -109,7 +123,8 @@ for fp in "${FPS[@]}"; do
   RESTART_LOG="$LOG_DIR/$fp.restart.log"
 
   # Phase 1: server with the failpoint armed.
-  PID=$(start_server "$fp" "$RUN_LOG")
+  start_server "$fp" "$RUN_LOG"
+  PID=$STARTED_PID
   if ! ph_wait_for_http "$BASE/" 60; then
     ph_fail "$fp: server did not come up (see $RUN_LOG)"
     RESULTS+=("$fp BLOCKED(no-boot)"); ANY_BLOCKED=1; stop_server "$PID"; continue
@@ -136,7 +151,7 @@ for fp in "${FPS[@]}"; do
   ph_log "$fp: fired dedupKey=$DEDUP_KEY"
 
   # Phase 3: the armed process must die with the failpoint marker.
-  if ! ph_wait_for_exit "$PID" 60; then
+  if ! wait_for_server_exit "$PID" 60; then
     ph_warn "$fp: process still alive — failpoint never reached (lane code pending?). BLOCKED."
     RESULTS+=("$fp BLOCKED(not-reached)"); ANY_BLOCKED=1; stop_server "$PID"; continue
   fi
@@ -147,7 +162,8 @@ for fp in "${FPS[@]}"; do
   ph_log "$fp: process killed at the failpoint (137)"
 
   # Phase 4: restart WITHOUT the failpoint; recovery must complete within the deadline.
-  PID=$(start_server "" "$RESTART_LOG")
+  start_server "" "$RESTART_LOG"
+  PID=$STARTED_PID
   if ! ph_wait_for_http "$BASE/" 60; then
     ph_fail "$fp: restart failed (see $RESTART_LOG)"
     RESULTS+=("$fp FAIL(no-restart)"); ANY_FAIL=1; continue
