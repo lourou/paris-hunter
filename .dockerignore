@@ -38,6 +38,11 @@ Dockerfile
 docker-compose.yml
 docker-test.sh
 .dockerignore
+deploy/
+
+# Secrets — NEVER baked into the image (container env comes from compose env_file)
+.env
+.env.*
 
 # Logs
 *.log

@@ -1,0 +1,15 @@
+# paris-hunter — LOCAL SMOKE config (CP2 docker smoke only).
+# Plain HTTP on :8080, no TLS, no IP allowlist, no basic auth.
+# NEVER use this file in production.
+#
+# Usage: point the caddy service's Caddyfile mount at this file and publish
+# 8080 instead of 80/443 (an override file, or edit compose.yml locally):
+#   curl -X POST http://localhost:8080/api/webhook/stream-estate/<secret>/match
+
+{
+	auto_https off
+}
+
+:8080 {
+	reverse_proxy fredy:9998
+}

@@ -1,0 +1,51 @@
+# paris-hunter deploy stack (see docs/DEPLOY.md for the full runbook).
+#
+# INVARIANTS:
+#   - Exactly ONE fredy replica, NEVER scaled (single XMTP writer; the boot
+#     lock on CONVOS_DATA_DIR is only the backstop). Upgrades are
+#     stop-then-start, never rolling: `docker compose down && ... up -d`.
+#   - The container reads its env from ../.env via env_file. Host-side tool
+#     invocations instead use `node --env-file-if-exists=.env tools/...`.
+#   - Photo ciphertext blobs live on Scaleway Object Storage — there is no
+#     attachments volume and Caddy serves no attachments route.
+
+name: paris-hunter
+
+services:
+  fredy:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true # tini as PID 1: forwards SIGTERM to node (a bare node PID 1 ignores it) + reaps zombies
+    env_file: ../.env
+    environment:
+      - NODE_ENV=production
+      - FREDY_SKIP_CHROMIUM=true
+    volumes:
+      - fredy-db:/db # sqlite state: listings, inbox, outbox, ph meta
+      - fredy-conf:/conf # fredy config.json (generated on first boot)
+      - convos-data:/data/convos # XMTP identity + adapter state — back up WITH fredy-db
+    stop_grace_period: 30s # SIGTERM → finish in-flight send, close XMTP client
+    # NO ports: only Caddy is internet-facing; fredy:9998 is reachable on the
+    # compose network only.
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - '80:80'
+      - '443:443'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - fredy
+
+volumes:
+  fredy-db: {}
+  fredy-conf: {}
+  convos-data: {}
+  caddy-data: {}
+  caddy-config: {}
