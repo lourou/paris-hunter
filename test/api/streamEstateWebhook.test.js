@@ -23,7 +23,7 @@ vi.mock('../../lib/services/storage/jobStorage.js', () => ({
   getJobs: () => [{ id: 'job-se-1', provider: [{ id: 'streamEstate', url: 'inbox://stream-estate' }] }],
 }));
 
-import streamEstateWebhookPlugin from '../../lib/api/routes/streamEstateWebhookRoute.js';
+import streamEstateWebhookPlugin, { BODY_LIMIT } from '../../lib/api/routes/streamEstateWebhookRoute.js';
 import { bus } from '../../lib/services/events/event-bus.js';
 import { toEpochMs, getParisHunterMeta } from '../../lib/services/paris-hunter/inbox.js';
 import { usageKeyFor } from '../../lib/services/paris-hunter/budget.js';
@@ -37,9 +37,9 @@ let app;
 let runOneEvents;
 let runOneListener;
 
-const buildApp = async () => {
+const buildApp = async (pluginOptions = {}) => {
   const fastify = Fastify();
-  await fastify.register(streamEstateWebhookPlugin, { prefix: '/api/webhook' });
+  await fastify.register(streamEstateWebhookPlugin, { prefix: '/api/webhook', ...pluginOptions });
   await fastify.ready();
   return fastify;
 };
@@ -75,6 +75,17 @@ describe('secret gate', () => {
 
   it('replies 404 on a wrong-length secret (no timingSafeEqual throw)', async () => {
     const res = await post('match', { secret: 'short' });
+    expect(res.statusCode).toBe(404);
+    expect(inboxRows()).toHaveLength(0);
+  });
+
+  it('replies 404 for equal-character Unicode input with a different byte length', async () => {
+    const unicode = encodeURIComponent('é'.repeat(48));
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/webhook/stream-estate/${unicode}/match`,
+      payload: fixture('match.json'),
+    });
     expect(res.statusCode).toBe(404);
     expect(inboxRows()).toHaveLength(0);
   });
@@ -143,6 +154,47 @@ describe('POST /event', () => {
   });
 });
 
+describe('payload schema and ingress bounds', () => {
+  it('rejects a match without a property identity', async () => {
+    const payload = fixture('match.json');
+    delete payload.property;
+    delete payload.propertyDocument.uuid;
+    const res = await post('match', { payload });
+    expect(res.statusCode).toBe(400);
+    expect(inboxRows()).toHaveLength(0);
+  });
+
+  it('rejects an event missing required event identity fields', async () => {
+    const payload = fixture('event-price-drop.json');
+    delete payload.adEvent.fieldNewValue;
+    const res = await post('event', { payload });
+    expect(res.statusCode).toBe(400);
+    expect(inboxRows()).toHaveLength(0);
+  });
+
+  it('rejects oversized scalars and arrays inside an otherwise valid payload', async () => {
+    const scalar = fixture('match.json');
+    scalar.pad = 'x'.repeat(65_537);
+    expect((await post('match', { payload: scalar })).statusCode).toBe(400);
+
+    const array = fixture('match.json');
+    array.propertyDocument.pictures = Array(101).fill('https://example.com/a.jpg');
+    expect((await post('match', { payload: array })).statusCode).toBe(400);
+    expect(inboxRows()).toHaveLength(0);
+  });
+
+  it('rate-limits repeated valid ingress per source', async () => {
+    await app.close();
+    app = await buildApp({ ingressRateLimit: 2 });
+    expect((await post('match')).statusCode).toBe(200);
+    expect((await post('event')).statusCode).toBe(200);
+    const limited = await post('match');
+    expect(limited.statusCode).toBe(429);
+    expect(limited.headers['retry-after']).toBeTruthy();
+    expect(inboxRows()).toHaveLength(2);
+  });
+});
+
 describe('GET /health (v3 A5 enablement probe)', () => {
   it('returns 200 with the correct secret and has no side effects', async () => {
     const res = await app.inject({ method: 'GET', url: `/api/webhook/stream-estate/${SECRET}/health` });
@@ -159,11 +211,11 @@ describe('GET /health (v3 A5 enablement probe)', () => {
 });
 
 describe('body limit', () => {
-  it('rejects payloads above 5 MB with 413', async () => {
+  it('rejects payloads above the 512 KiB ingress limit with 413', async () => {
     const res = await app.inject({
       method: 'POST',
       url: `/api/webhook/stream-estate/${SECRET}/match`,
-      payload: `{"pad":"${'x'.repeat(5 * 1024 * 1024)}"}`,
+      payload: `{"pad":"${'x'.repeat(BODY_LIMIT)}"}`,
       headers: { 'content-type': 'application/json' },
     });
     expect(res.statusCode).toBe(413);

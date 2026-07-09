@@ -154,12 +154,22 @@ describe('watermark gate boundaries (v3 A4/A5)', () => {
     expect(decisions()[0].decision).toBe('outboxed');
   });
 
-  it('missing/invalid ingress timestamp → suppressed:invalid-timestamp, no seen, no outbox', async () => {
+  it('missing/invalid ingress timestamp → atomically seen + suppressed, no outbox', async () => {
     seedGate();
     insertFixture('match.json', { eventAt: null });
     await provider.config.getListings();
     expect(decisions()[0].decision).toBe('suppressed:invalid-timestamp');
-    expect(seenCount()).toBe(0);
+    expect(seenCount()).toBe(1);
+    expect(outboxRows()).toHaveLength(0);
+  });
+
+  it('a timestamp-corrected replay of the same raw match stays suppressed by the raw ledger', async () => {
+    seedGate();
+    insertFixture('match.json', { eventAt: null });
+    insertFixture('match.json', { eventAt: MATCH_EVENT_AT });
+    await provider.config.getListings();
+    expect(decisions().map((row) => row.decision)).toEqual(['suppressed:invalid-timestamp', 'duplicate']);
+    expect(seenCount()).toBe(1);
     expect(outboxRows()).toHaveLength(0);
   });
 

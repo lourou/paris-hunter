@@ -192,6 +192,24 @@ describe('safeFetch SSRF guards', () => {
     expect(performRequest).toHaveBeenCalledTimes(4); // initial + 3 followed hops
   });
 
+  it('caps and destroys an oversized redirect body before following the next hop', async () => {
+    const resolveAddresses = vi.fn(async () => publicAnswer);
+    const body = bodyFrom([Buffer.alloc(5)]);
+    body.destroy = vi.fn();
+    const performRequest = vi.fn(async () => ({
+      statusCode: 302,
+      headers: { location: 'https://images.example.com/next.jpg' },
+      body,
+      close: vi.fn(async () => {}),
+    }));
+
+    await expect(
+      safeFetch('https://images.example.com/start.jpg', { maxBytes: 4, resolveAddresses, performRequest }),
+    ).rejects.toThrow(/byte cap/);
+    expect(body.destroy).toHaveBeenCalledOnce();
+    expect(performRequest).toHaveBeenCalledTimes(1);
+  });
+
   it('enforces the 8 MB cap while streaming and from content-length', async () => {
     const resolveAddresses = vi.fn(async () => publicAnswer);
     const big = Buffer.alloc(1024 * 1024, 7);
