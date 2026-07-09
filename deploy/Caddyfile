@@ -1,0 +1,39 @@
+# paris-hunter — production Caddyfile.
+# Replace hunter.example.com with your real domain (DNS A record → VPS IP).
+# TLS certificates are automatic (Let's Encrypt) once DNS resolves.
+
+hunter.example.com {
+	# --- Stream Estate webhook ---------------------------------------------
+	# Two factors: IP allowlist here (Stream Estate egress IP) + the secret
+	# path segment checked in-app (timingSafeEqual). While testing against the
+	# Stream Estate SANDBOX, add its IP too:  remote_ip 144.76.91.183 178.238.226.136
+	@webhook {
+		path /api/webhook/*
+		remote_ip 144.76.91.183
+	}
+	handle @webhook {
+		reverse_proxy fredy:9998
+	}
+
+	# Same path from any other IP → flat 403 (never reaches the app).
+	@webhook_denied {
+		path /api/webhook/*
+	}
+	handle @webhook_denied {
+		respond 403
+	}
+
+	# --- Fredy admin UI ----------------------------------------------------
+	# Basic auth protects the UI from the open internet. Generate the hash:
+	#   docker run --rm caddy:2 caddy hash-password --plaintext 'your-password'
+	handle {
+		basic_auth {
+			admin <bcrypt-hash>
+		}
+		reverse_proxy fredy:9998
+	}
+
+	# NOTE: no /attachments route on purpose — photo ciphertext blobs are
+	# served directly by Scaleway Object Storage:
+	#   https://paris-hunter.s3.fr-par.scw.cloud/attachments/<file>
+}
