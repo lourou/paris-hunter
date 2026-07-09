@@ -150,6 +150,12 @@ export const findInboxRow = (externalId) => {
   return rows[0] ?? null;
 };
 
+export const findInboxDecisions = (externalId) =>
+  SqliteConnection.query(
+    'SELECT id, decision, done_at FROM stream_estate_inbox WHERE external_id LIKE :pattern ORDER BY id',
+    { pattern: `%${externalId}%` },
+  );
+
 export const findOutboxRow = (dedupKey) => {
   const rows = SqliteConnection.query('SELECT * FROM convos_outbox WHERE id = :id OR dedup_key = :id LIMIT 1', {
     id: dedupKey,
@@ -251,6 +257,11 @@ if (isMain) {
       console.log(JSON.stringify(findInboxRow(args[0]), null, 2));
       break;
     }
+    case 'inbox-decisions': {
+      requireTables();
+      console.log(JSON.stringify(findInboxDecisions(args[0]), null, 2));
+      break;
+    }
     case 'outbox-row': {
       requireTables();
       console.log(JSON.stringify(findOutboxRow(args[0]), null, 2));
@@ -273,6 +284,7 @@ if (isMain) {
       // it the gate will treat us as unseeded — flagged loudly so the runner can BLOCK.
       let configRev = null;
       for (const [modulePath, names] of [
+        ['../../../lib/services/paris-hunter/searchConfig.js', ['currentConfigRev', 'computeConfigRev']],
         ['../../../lib/provider/streamEstate.js', ['computeConfigRev', 'currentConfigRev', 'configRev']],
         ['../../../lib/services/paris-hunter/inbox.js', ['computeConfigRev', 'currentConfigRev']],
       ]) {

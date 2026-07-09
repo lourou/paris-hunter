@@ -54,7 +54,13 @@ CONVOS_BIN="$REPO_ROOT/node_modules/.bin/convos"
 
 SECRET="$(ph_env STREAM_ESTATE_WEBHOOK_SECRET)"
 
-fire() { "$QA_DIR_SELF/fire-webhook.sh" "$@" --base "$BASE"; }
+fire() {
+  local fixture="$1"
+  shift
+  "$QA_DIR_SELF/fire-webhook.sh" "$fixture" "$@" \
+    --photo "${PH_QA_PHOTO_URL:-https://picsum.photos/seed/paris-hunter-qa/1600/1067}" \
+    --base "$BASE"
+}
 dbjs() { ph_node tools/paris-hunter/qa/db.js "$@"; }
 creator_offset() { [ -f "$CREATOR_LOG" ] && wc -l <"$CREATOR_LOG" || echo 0; }
 count_messages_since() { ph_count_lines "$CREATOR_LOG" '"event"[[:space:]]*:[[:space:]]*"message"' "$1"; }
@@ -67,6 +73,7 @@ require_state() {
 
 start_server() { # extra env pairs as args; writes server.pid
   local extra=("$@")
+  ph_kill_port "$PORT"
   (cd "$REPO_ROOT" && exec env \
     XMTP_ENV=dev CONVOS_ENABLED=true FREDY_SKIP_CHROMIUM=true \
     CONVOS_DATA_DIR="$QA_DIR/convos-data" \
@@ -145,6 +152,7 @@ case "$PHASE" in
     rm -rf "$QA_DIR/convos-data" && mkdir -p "$QA_DIR/convos-data"
     OFFSET=$(creator_offset)
     start_server || exit 1
+    dbjs qa-ensure-job >/dev/null || { ph_fail "could not create the local QA job"; exit 2; }
     ph_wait_for_line "$CREATOR_LOG" '"event"[[:space:]]*:[[:space:]]*"member_joined"' 300 "$OFFSET" || {
       ph_fail "no member_joined within 5 min (join flow broken or lane 3 pending)"; exit 1; }
     N_MSG=$(count_messages_since "$OFFSET")
@@ -165,10 +173,10 @@ case "$PHASE" in
     sleep 20
     N_MSG=$(count_messages_since "$OFFSET")
     [ "$N_MSG" -eq 0 ] || { ph_fail "AC2 violated: $N_MSG message(s) while UNSEEDED"; exit 1; }
-    ROW=$(dbjs inbox-row "$EXT_ID")
-    echo "$ROW" | grep -q '"decision": *"suppressed:unseeded"' && \
+    ROWS=$(dbjs inbox-decisions "$EXT_ID")
+    echo "$ROWS" | grep -q '"decision": *"suppressed:unseeded"' && \
       ph_pass "AC2: 0 messages, decision suppressed:unseeded" || {
-      ph_fail "AC2: expected decision suppressed:unseeded — got: $(echo "$ROW" | grep '"decision"')"; exit 1; }
+      ph_fail "AC2: expected a suppressed:unseeded decision — got: $(echo "$ROWS" | grep '"decision"')"; exit 1; }
     ;;
 
   # -------------------------------------------------------------------------

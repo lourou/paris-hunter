@@ -38,7 +38,7 @@ ph_wait_for_http() {
   local url="$1" timeout="${2:-60}" start code
   start=$(date +%s)
   while true; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$url" 2>/dev/null || echo 000)
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 2 "$url" 2>/dev/null) || code=000
     if [ "$code" != "000" ]; then return 0; fi
     if [ $(($(date +%s) - start)) -ge "$timeout" ]; then return 1; fi
     sleep 1
@@ -77,7 +77,16 @@ ph_count_lines() {
 # ph_kill_port PORT — free a TCP port (stale server from an earlier run).
 ph_kill_port() {
   local port="$1"
-  lsof -ti ":$port" 2>/dev/null | xargs kill 2>/dev/null || true
+  local pids remaining
+  pids=$(lsof -ti ":$port" 2>/dev/null || true)
+  [ -n "$pids" ] || return 0
+  printf '%s\n' "$pids" | xargs kill 2>/dev/null || true
+  for _ in 1 2 3 4 5; do
+    remaining=$(lsof -ti ":$port" 2>/dev/null || true)
+    [ -z "$remaining" ] && return 0
+    sleep 1
+  done
+  printf '%s\n' "$remaining" | xargs kill -9 2>/dev/null || true
 }
 
 # ph_node ARGS... — run node with repo .env loaded, from the repo root.

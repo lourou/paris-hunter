@@ -63,7 +63,7 @@ REDACTED_URL="$BASE/api/webhook/stream-estate/<redacted>/$KIND"
 STATUS_OK=0
 for i in $(seq 1 "$REPEAT"); do
   CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 \
-    -X POST -H 'Content-Type: application/json' --data-binary "@$TMP_BODY" "$URL" || echo 000)
+    -X POST -H 'Content-Type: application/json' --data-binary "@$TMP_BODY" "$URL") || CODE=000
   ph_log "fired $FIXTURE ($i/$REPEAT) -> $REDACTED_URL : HTTP $CODE (externalId=$EXTERNAL_ID dedupKey=$DEDUP_KEY)"
   if [ "$EXPECT" != "any" ] && [ "$CODE" != "$EXPECT" ]; then
     STATUS_OK=1
