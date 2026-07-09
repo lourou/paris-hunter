@@ -17,6 +17,7 @@ import { getSettings } from './lib/services/storage/settingsStorage.js';
 import SqliteConnection, { computeDbPath } from './lib/services/storage/SqliteConnection.js';
 import { initJobExecutionService } from './lib/services/jobs/jobExecutionService.js';
 import { ensureValidBinary } from './lib/services/ensureValidBinary.js';
+import { initParisHunter } from './lib/services/paris-hunter/init.js';
 
 // Ensure the CloakBrowser stealth Chromium binary is present and complete before
 // jobs run.  ensureValidBinary() also detects and auto-heals partial extractions
@@ -46,6 +47,11 @@ if (!isConfigAccessible) {
 
 // Run DB migrations once at startup and block until finished
 await runMigrations();
+
+// paris-hunter: env fail-fast validation, inbox watchdog, convos adapter init, budget
+// monitor (build plan v2 — no module-top-level side effects anywhere). Boot-fatal on
+// invalid env unless PARIS_HUNTER_ENABLED=false.
+await initParisHunter();
 
 const settings = await getSettings();
 
