@@ -1,385 +1,105 @@
-<p align="center">
+# paris-hunter
 
-<a href="https://fredy.orange-coding.net/">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://github.com/orangecoding/fredy/blob/master/doc/logo_white.png" width="400">
-  <source media="(prefers-color-scheme: light)" srcset="https://github.com/orangecoding/fredy/blob/master/doc/logo.png" width="400">
-  <img alt="Jetbrains Open Source" src="https://github.com/orangecoding/fredy/blob/master/doc/logo.png">
-</picture>
-</a>
-</p>
+Automated Paris rental hunt for lourou + the group. A thin fork of
+[Fredy](https://github.com/orangecoding/fredy) (merged at upstream `428977e`, v22.9.7)
+that turns Stream Estate saved-search webhooks into scored listing messages in a
+Convos (XMTP) group — first photo as attachment + a French scored summary.
 
-<p align="center">
-  <a href="https://fredy.orange-coding.net/" target="_blank">Website</a>&nbsp;&nbsp;|&nbsp;&nbsp;
-  <a href="https://fredy-demo.orange-coding.net/" target="_blank">Demo</a>
-</p>
+Target: a matching listing published anywhere → group message in **< 5 minutes**
+(dominated by upstream publication delay). The webhook→message leg is live-QA-proven
+at **p95 ≈ 1.8 s** (budget: 30 s).
 
-<p align="center">
-  <img src="https://github.com/orangecoding/fredy/actions/workflows/test.yml/badge.svg" alt="Tests" />
-  <img src="https://github.com/orangecoding/fredy/actions/workflows/docker.yml/badge.svg" alt="Docker" />
-  <img src="https://github.com/orangecoding/fredy/actions/workflows/check_source.yml/badge.svg" alt="Source" />
-  <img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fghcr-badge.elias.eu.org%2Fapi%2Forangecoding%2Ffredy%2Ffredy&query=%24.downloadCount&label=Docker%20Pulls" alt="Docker Pulls" />
-</p>
-
-
-
-# Fredy 🏡 - Your Self-Hosted Real Estate Finder for Germany
-
-Finding an apartment or house in Germany can be stressful and
-time-consuming.\
-**Fredy** makes it easier: it automatically scrapes **ImmoScout24,
-Immowelt, Immonet, eBay Kleinanzeigen, and WG-Gesucht** and notifies you
-instantly via **Slack, Telegram, Email, ntfy, discord and more** when new
-listings appear.
-
-With a modern architecture, Fredy provides a **clean Web UI**, removes
-duplicates across platforms, and stores results so you never see the
-same listing twice.
-
-------------------------------------------------------------------------
-
-## ✨ Key Features
-
--   🏠 Scrapes **ImmoScout24, Immowelt, Immonet, eBay Kleinanzeigen,
-    WG-Gesucht**
--   ⚡ Instant notifications: Slack, Telegram, Email (SendGrid,
-    Mailjet), ntfy, discord 
--   🔎 Uses the **ImmoScout Mobile API** (reverse engineered)
--   🌍 Runs anywhere: Docker, Node.js, self-hosted
--   🖥️ Intuitive **Web UI** to manage searches
--   🎯 Easy to use thanks to a user-friendly Web UI
--   🔄 Deduplication across platforms
--   ⏱️ Customizable search intervals
-
-------------------------------------------------------------------------
-
-## 🤝 Sponsorship [![](https://img.shields.io/static/v1?label=Sponsor&message=❤&logo=GitHub&color=%23fe8e86)](https://github.com/sponsors/orangecoding)
-
-I maintain Fredy and other open-source projects in my free time, if you find it useful, consider supporting the project ❤️
-
-#### Support me on 
-[Ko-Fi](https://ko-fi.com/orangecoding) |  [Github](https://github.com/sponsors/orangecoding)
-----
-
-Fredy is proudly backed by the **JetBrains Open Source Support Program**.   
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://www.jetbrains.com/company/brand/img/logo_jb_dos_3.svg">
-  <source media="(prefers-color-scheme: light)" srcset="https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg">
-  <img alt="Jetbrains Open Source" src="https://resources.jetbrains.com/storage/products/company/brand/logos/jetbrains.svg">
-</picture>
-
-------------------------------------------------------------------------
-
-## 👨‍🏫 Demo
-You can try out Fredy here: [Fredy Demo](https://fredy-demo.orange-coding.net/)
-
-------------------------------------------------------------------------
-
-## 🚀 Quick Start
-
-### With Docker
-
-> [!NOTE]
-> In order to start Fredy, you must provide a config.json. As a start, use the one in this repo: https://github.com/orangecoding/fredy/blob/master/conf/config.json
-
-``` bash
-docker run -d --name fredy \
-  -v fredy_conf:/conf \
-  -v fredy_db:/db \
-  -p 9998:9998 \
-  ghcr.io/orangecoding/fredy:master
-```
-
-Logs:
-
-``` bash
-docker logs fredy -f
-```
-
-### Manual (Node.js)
-
--   Requirement: **Node.js 22 or higher**
--   Install dependencies and start:
-
-``` bash
-yarn
-yarn run start:backend   # in one terminal
-yarn run start:frontend  # in another terminal
-```
-
-👉 Open <http://localhost:9998>
-
-### With Unraid
-
-Should you use [Unraid](https://unraid.net/), you can now install Fredy from the community store :)
-
-**Default Login:**
-- Username: `admin`
-- Password: `admin`
-
-------------------------------------------------------------------------
-
-## 📸 Screenshots
-
-| Fredy Maps View                                  | Dashboard                                               | Found Listings                                                              |
-|--------------------------------------------------|-----------------------------------------------------------------------|-----------------------------------------------------------------------------|
-| ![Screenshot showing Fredy](doc/screenshot1.png) | ![Screenshot showing job configuration in Fredy](doc/screenshot3.png) | ![Screenshot showing found listings in Fredy](doc/screenshot2.png) |
-
-------------------------------------------------------------------------
-
-## 🧩 Core Concepts
-
-Fredy is built around three simple concepts:
-
-### Provider 🌐
-
-A **provider** is a real-estate platform (e.g. ImmoScout24, Immowelt,
-Immonet, eBay Kleinanzeigen, WG-Gesucht).\
-When you create a job, you paste the search URL from the platform into
-Fredy.\
-⚠️ Always make sure the search results are sorted by **date**, so Fredy
-picks up the newest listings first.
-
-### Adapter 📡
-
-An **adapter** is the channel through which Fredy notifies you (Slack,
-Telegram, Email, ntfy, discord ...).\
-Each adapter has its own configuration (e.g. API keys, webhook URLs).\
-You can use multiple adapters at once --- Fredy will send new listings
-through all of them.
-
-### Job 📅
-
-A **job** combines providers and adapters.\
-Example: "Search apartments on ImmoScout24 + Immowelt and send results
-to Slack + Telegram."\
-Jobs run automatically at the interval you configure (see
-`/conf/config.json`).
-
-### MCP Server 🤖
-
-Starting with **V20**, Fredy ships with a built-in **MCP Server **. This allows you to connect Fredy to LLMs (like Claude, ChatGPT, or local models via LM Studio) and query your real estate data using natural language.
-The local LLM can even enrich existing listings by checking the listing online.   
-
-For more information on how to set it up and use it, please refer to the [MCP Readme](lib/mcp/README.md).
-
-------------------------------------------------------------------------
-
-## Immoscout
-
-Immoscout has implemented advanced bot detection. In order to work around this, we are using a reversed engineered version of their mobile api. See [Immoscout Reverse Engineering Documentation](https://github.com/orangecoding/fredy/blob/master/reverse-engineered-immoscout.md)
-
-## 🛡️ Bot Detection & Proxies
-
-Most browser-based providers (immowelt, immonet, kleinanzeigen, ...) are scraped through a hardened headless browser ([CloakBrowser](https://www.npmjs.com/package/cloakbrowser)). It makes the **browser fingerprint** indistinguishable from a real Chrome, which is enough when you run Fredy on a normal home connection.
-
-On a **server / VPS the requests usually originate from a datacenter IP**, and providers behind anti-bot systems (e.g. AWS CloudFront/WAF) block those based on **IP reputation alone**, no matter how perfect the fingerprint is. The typical symptom: it works locally but you get `We have been detected as a bot :-/` on the server.
-
-### The fix: a residential proxy
-
-A **residential proxy** routes Fredy's browser through the internet connection of a real household, so the provider sees a "normal user" IP instead of a datacenter. For German portals, use a **German (DE) residential** (or mobile/4G) proxy. Plain VPNs and **datacenter proxies do not help** here, they share the same bad reputation as your server.
-
-**Configure it** under **Settings → Execution → Proxy URL**. Supported formats:
+## Architecture
 
 ```
-http://user:pass@host:port
-socks5://user:pass@host:port
+Stream Estate saved search (server-side filters)
+        │  webhook: POST /api/webhook/stream-estate/<secret>/{match,event}
+        ▼
+Fredy web server ──▶ stream_estate_inbox (durable sqlite queue)
+        ▼
+provider streamEstate ── normalize → hard exclusions → price/rooms/zip guard
+        ▼
+scoring: €/m² + cap-ratio vs per-arrondissement cap table
+        ▼
+notification adapter convos ── outbox (at-least-once) ──▶ XMTP group message
+                                    └──▶ Scaleway bucket (ciphertext photo blobs)
 ```
 
-Leave the field empty to disable. The proxy applies to all headless-browser providers and takes effect on the next job run (no restart needed). Immoscout uses a separate mobile API and is not affected.
+Thin-fork design: everything ours is additive — `lib/services/paris-hunter/**`
+(config, scoring, cap table, exclusions, inbox, budget guard, message format),
+the `lib/provider/streamEstate.js` provider (webhook-fed, API-only, no Chromium —
+`FREDY_SKIP_CHROMIUM=true` skips the CloakBrowser download), the
+`lib/notification/adapter/convos.js` adapter (XMTP send-only participant with a
+durable outbox), and `tools/paris-hunter/**`. Upstream files carry only a register
+line plus guards, so upstream rebases stay cheap (see Fork maintenance below).
 
-### Where to get a residential proxy
+## Search criteria (current config)
 
-Residential proxies are a paid service (usually billed per GB, Fredy's traffic is small). Well-known providers offering German residential IPs include:
+Defaults live in `lib/services/paris-hunter/phConfig.js`; all overridable via
+`PH_*` env vars (see `.env.example`).
 
-| Provider | Notes |
-|---|---|
-| [IPRoyal](https://iproyal.com) | Pay-as-you-go, no monthly minimum, good for low volume |
-| [Webshare](https://www.webshare.io) | Cheap entry tier, has a small free plan to test with |
-| [Decodo (formerly Smartproxy)](https://decodo.com) | Easy setup, country/city targeting |
-| [SOAX](https://soax.com) | Residential + mobile, fine-grained geo-targeting |
-| [Bright Data](https://brightdata.com) | Largest pool, most features, higher complexity/price |
-| [Oxylabs](https://oxylabs.io) | Enterprise-grade, larger plans |
+- **Location:** Paris 11e + 12e (75011, 75012). Secondary zones to enable later:
+  10e, 20e, 3e, 4e.
+- **Type:** apartment, **unfurnished** (location nue, bail loi 1989), long-term.
+- **Rooms:** 3–4 pièces. **Price:** €2,500–3,100/month **hors charges**.
+  Surface: no hard filter (used for scoring only).
+- **Hard exclusions (regex post-filter):** meublé, colocation/coloc, bail
+  mobilité, courte durée, sous-location, saisonnière.
+- **Scoring (flag, don't decide):** `pricePerM2 = priceHc / surface`;
+  `capRatio = pricePerM2 / cap` where the cap approximates the *loyer de
+  référence majoré* per arrondissement (€/m², `capTable.js`):
+  `{11e: 34, 12e: 32, 10e: 33, 20e: 30, 3e: 38, 4e: 39, 9e: 34}`.
+  Flags: `OVER_CAP` if capRatio > 1.05 · `GOOD_DEAL` if < 0.85 ·
+  `NO_SURFACE` if surface missing.
 
-This is not an endorsement, pick whatever fits your budget. For low-volume use like Fredy, a pay-as-you-go plan (e.g. IPRoyal) or a cheap entry tier (e.g. Webshare) is usually plenty. Make sure to select **Germany** as the proxy location and keep the search interval reasonable (the higher the interval, the less you look like a bot).
+Price-decrease events on a known listing re-notify once, with a distinct
+"⬇️ baisse de prix" format.
 
-## Analytics
+## Ops
 
-Fredy is completely free (and will always remain free). However, it would be a huge help if you’d allow me to collect some analytical data.
-Before you freak out, let me explain...  
-If you agree, Fredy will send a ping once every 6 hours to my internal tracking project (Will be open sourced soon).  
-The data includes: names of active adapters/providers, OS, architecture, Node version, and language. The information is entirely anonymous and helps me understand which adapters/providers are most frequently used.</p>
+**`docs/DEPLOY.md` is the source of truth** — VPS runbook (docker-compose stack,
+Fredy behind Caddy with TLS + webhook IP allowlist, exact first-boot order that
+guarantees the silent first run, single-writer discipline, backup/restore).
 
-**Thanks**🤘
+- `docs/QA.md` — QA harness, failpoint kill matrix, acceptance matrix, live E2E runbook.
+- `docs/BRIEF-paris-hunter.md` — original product brief.
+- `tools/paris-hunter/` — `bootstrap.js` (saved search create/reconcile/enable),
+  `seed.js` (mark existing market as seen), `setup-bucket.js` (bucket lifecycle),
+  `qa/` (harness). Invoke with `node --env-file-if-exists=.env …` outside docker.
+- `.env.example` — every env var, documented. Local run: `yarn start:paris-hunter`.
+- **Budget guard:** `PH_MONTHLY_ITEM_BUDGET` (default 900 items/month ≈ €9
+  Stream Estate PAYG) — WARN logs from 70%, and at 90% the app **auto-disables
+  the saved search** on the Stream Estate side; re-arm flow in `docs/DEPLOY.md` §7.
+- **Attachments:** photo blobs live in the Scaleway bucket `paris-hunter`
+  (fr-par) — ciphertext of downscaled photos (XMTP remote-attachment scheme),
+  public-read, `ONEZONE_IA`, 180-day lifecycle (rule `ph-attachments-180d`,
+  applied by `setup-bucket.js`). Expendable: losing them only breaks the image
+  bubble of old messages.
 
-## 🐞 Debug Information
+## Notification semantics (honesty note)
 
-Since Fredy **22.5.0** there is a built-in way to capture everything Fredy logs into the
-database for a limited time and download it as a single zip file. This is the recommended
-way to attach diagnostics to a bug report. I decided against simply putting all logs into
-a debug bundle due to privacy reasons!
+Delivery is **at-least-once**. Decision-level exactly-once is strict (at most one
+outbox row per dedup key, ever), but the XMTP SDK has no send idempotency: a crash
+exactly between a network send and its state write can produce one duplicate
+message. Every such resend is WARN-logged (`possible duplicate`) — a duplicate
+without that log line is a bug.
 
-**How it works**
+## Fork maintenance
 
-- Debug logging is **opt-in** and admin-only. As long as it is off, Fredy behaves exactly
-  as before (console output only, nothing in the DB).
-- When you turn it on, every log line (`debug`, `info`, `warn`, `error`) is additionally
-  written into the `debug_logs` SQLite table. The console keeps logging at its usual level.
-- The recorded data is hard-capped at **5 MiB** via a rolling buffer: once the cap is hit,
-  the oldest entries are dropped automatically so the newest ones always survive.
-- The on/off flag is persisted, so debug logging stays on across restarts (and you'll see
-  the warning banner everywhere until you turn it off again).
+- Upstream: https://github.com/orangecoding/fredy, merged at `428977e` (v22.9.7),
+  remote `upstream`, branch `master`.
+- Rebase: `git fetch upstream && git merge upstream/master`. Our code is additive
+  plugin files, so conflicts should be ≈ zero.
+- This `README.md` is protected from upstream merges via `.gitattributes`
+  (`README.md merge=ours`). The `ours` merge driver must be enabled **once per
+  clone**: `git config merge.ours.driver true`.
+- The upstream README is preserved verbatim at `README-fredy-upstream.md`
+  (Fredy's own docs: providers, adapters, UI, general usage).
 
-**Capturing a debug bundle**
+## v2 backlog (out of scope, see brief §6)
 
-1. Open Fredy as an **admin** and go to **Settings → Debug**.
-2. Click **"Enable debug logging" / "Debug-Logging aktivieren"**. A red banner appears on
-   every page while recording is on.
-3. **Reproduce the bug**.
-4. Come back to **Settings → Debug** and check the progress bar, if it stayed at 0 %,
-   nothing was captured.
-5. Click **"Download debug information" / "Debug Informationen herunterladen"**. You get a
-   zip named `YYYY-MM-DD-FredyDebug-<version>.zip` containing two files:
-   - `logs.txt` - every log line captured while recording was on, prefixed with timestamp
-     and level.
-   - `sys.txt` - runtime snapshot (Fredy version, Node.js version, OS, Docker detection,
-     CPU, memory, sanitized settings). Proxy credentials and session secrets are
-     **stripped** before export.
-6. Attach the zip to the bug report.
-7. Optional but recommended: click **"Disable debug logging"** to stop recording, and
-   **"Delete stored debug logs"** once you've sent the zip so the DB does not keep them
-   around.
-
-**What is _not_ included**
-
-- passwords/privacy relevant things
-- Anything that Fredy itself does not pass through its `logger`. If a third-party library
-  writes directly to `process.stderr`, that output stays on the console only.
-
-## 🛠️ Development
-
-### Development Mode
-
-``` bash
-yarn run start:backend:dev
-yarn run start:frontend:dev
-```
-You should now be able to access _Fredy_ from your browser. Check your Terminal to see what port the frontend is running on.
-
-### Run Tests
-
-## "Online" tests
-These tests are directly executed against the actual providers.
-``` bash
-yarn run test
-```
-
-## "Offline" tests
-These tests are using the test fixtures instead of the actual providers. Much faster and "good enough" to test the core functionality.
-``` bash
-yarn run test:offline
-```
-
-## Download new fixtures
-If you have to refresh the fixtures (every once in a while needed because the providers change their code), run this command:
-``` bash
-yarn run download-fixtures
-```
-
-## Adding a new language
-
-Fredy's UI is fully multilingual. Translation files live in `ui/src/locales/`. To add a new language, create a single JSON file there, no code changes required.
-
-**Example: `ui/src/locales/fr.json`**
-```json
-{
-  "_meta": {
-    "flag": "🇫🇷",
-    "name": "Français",
-    "locale": "fr-FR",
-    "semiLocale": "fr"
-  },
-  "nav.dashboard": "Tableau de bord",
-  "common.save": "Enregistrer",
-  ...
-}
-```
-
-The `_meta` fields:
-
-| Field | Description |
-|---|---|
-| `flag` | Unicode flag emoji shown in the language selector |
-| `name` | Display name shown in the language selector |
-| `locale` | BCP 47 locale string used for date and number formatting (e.g. `fr-FR`) |
-| `semiLocale` | Semi UI locale key for component-level strings (date pickers, pagination, etc.) |
-
-> **Important:** `semiLocale` must exactly match a locale filename from the Semi UI locale sources (without the `.js` extension). See the [available Semi UI locales on GitHub](https://github.com/DouyinFE/semi-design/tree/main/packages/semi-ui/locale/source) for the full list of supported keys.
-
-After adding the file, rebuild the frontend (`yarn build:frontend` or restart the dev server) and the new language will appear automatically in **Settings → User Settings → Language**.
-
-------------------------------------------------------------------------
-
-## 📐 Architecture
-
-``` mermaid
-flowchart TD
- subgraph Jobs["Jobs"]
-        A1["Job 1"]
-        A2["Job 2"]
-        A3["Job 3"]
-  end
- subgraph Providers["Providers"]
-        C1["Provider 1"]
-        C2["Provider 2"]
-        C3["Provider 3"]
-  end
- subgraph NotificationAdapters["Notification Adapters"]
-        F1["Adapter 1"]
-        F2["Adapter 2"]
-  end
-
-    A1 --> B["FredyPipelineExecutioner"]
-    A2 --> B
-    A3 --> B
-    B --> C1 & C2 & C3
-    C1 --> D["Similarity Check"]
-    C2 --> D
-    C3 --> D
-    D --> E{"Duplicate?"}
-    E -- No --> F1
-    F1 --> F2
-```
-
-------------------------------------------------------------------------
-## 🤖 Using AI such as Claude Code
-When I started building Fredy, LLMs were still basically the wet dream of a few nerdy scientists.
-
-Nowadays, it’s easier than ever to throw a prompt into the LLM of your choice and let 'the AI' build your stuff. I’m not against that. I use Claude Code myself for smaller tasks, and I do think these tools can be really useful.
-
-That said, I still believe humans should stay in charge. AI is great-ish at writing code, but it still lacks creativity, context, and the ability to see the full picture.
-
-So, if you want to contribute to Fredy, using AI tools to get things done is totally fine. Just please don’t stop thinking.
-
-I’ve had one too many PRs full of hallucinated bullshit.
-
-**Thanks ;)**
-
-------------------------------------------------------------------------
-
-## 👐 Contributing
-
-Thanks to everyone who has contributed!
-
-<a href="https://github.com/orangecoding/fredy/graphs/contributors"><img src="https://contrib.rocks/image?repo=orangecoding/fredy" /></a>
-
-See the [Contributing
-Guide](https://github.com/orangecoding/fredy/blob/master/CONTRIBUTING.md).
-
-------------------------------------------------------------------------
-
-## ⭐ Star History
-
-[![Star History
-Chart](https://api.star-history.com/svg?repos=orangecoding/fredy&type=Date)](https://www.star-history.com/#orangecoding/fredy&Date)
+- Real DRIHL encadrement grid (80 quartiers × rooms × era) + quartier point-in-polygon.
+- Two-way group commands ("ok"/"non"/"visite" replies → status; deterministic reply parsing, no LLM).
+- Stream Estate MCP tool for free-form queries in the group.
+- Custom sources for institutional landlord portals (YouFirst/Gecina, CDC Habitat).
+- Optional TanStack Start dashboard, only if the group-chat CRM proves insufficient.
