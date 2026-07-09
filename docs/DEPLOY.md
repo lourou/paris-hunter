@@ -63,24 +63,25 @@ node --env-file-if-exists=.env tools/paris-hunter/setup-bucket.js            # a
 ```
 
 What it does: asserts the bucket exists (never creates it), then MERGES a lifecycle rule
-`ph-attachments-30d` — scoped to the `attachments/` key prefix, 30-day expiry, plus a 30-day
-noncurrent-version expiry iff bucket versioning is enabled. All pre-existing rules are preserved
-verbatim; re-running is idempotent.
+`ph-attachments-180d` — scoped to the `attachments/` key prefix, 180-day expiry, plus a 180-day
+noncurrent-version expiry iff bucket versioning is enabled. All foreign pre-existing rules are
+preserved verbatim; any superseded `ph-attachments-*` rule (e.g. the old `ph-attachments-30d`)
+is replaced, so exactly one of our rules exists after apply. Re-running is idempotent.
 
 aws-cli fallback (equivalent):
 
 ```bash
 aws s3api get-bucket-lifecycle-configuration --endpoint-url "$SCW_S3_ENDPOINT" --bucket "$SCW_S3_BUCKET"
-# merge by hand, keep existing rules, then:
+# merge by hand: keep foreign rules, DROP any old ph-attachments-* rule (e.g. ph-attachments-30d), then:
 aws s3api put-bucket-lifecycle-configuration --endpoint-url "$SCW_S3_ENDPOINT" --bucket "$SCW_S3_BUCKET" \
-  --lifecycle-configuration '{"Rules":[<existing rules...>,{"ID":"ph-attachments-30d","Status":"Enabled","Filter":{"Prefix":"attachments/"},"Expiration":{"Days":30}}]}'
+  --lifecycle-configuration '{"Rules":[<foreign rules...>,{"ID":"ph-attachments-180d","Status":"Enabled","Filter":{"Prefix":"attachments/"},"Expiration":{"Days":180}}]}'
 ```
 
 ### Storage class & cost note
 
 Uploads use `StorageClass: ONEZONE_IA` + `ACL: public-read` (user decision; mandatory on every
 upload). Cost reality check: Scaleway bills Object Storage in started GB-hour units; at our volume
-(~300 objects/month × ~300 KB ≈ 0.09 GB live at any time under the 30-day sweep) either storage
+(~6 months × ~300 objects/month × ~300 KB ≈ 0.5 GB live at any time under the 180-day sweep) either storage
 class costs cents per month — the class choice is immaterial at this scale. One Zone - IA is meant
 for recreatable data, which fits: blobs are ciphertext of downscaled photos, fully expendable
 (losing them only breaks the image bubble of old messages; text messages are unaffected).

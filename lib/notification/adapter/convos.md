@@ -21,4 +21,4 @@ This adapter is intentionally different from the other Fredy adapters:
 2. Set `CONVOS_INVITE_URL` and start the adapter with an empty data dir; it sends a join request over a DM (the group stays silent) and polls up to 24 h for acceptance.
 3. After the join, lock the conversation in the app (this rotates the invite tag — the only real invalidation of the outstanding invite URL).
 
-Photos are encrypted before upload; the (Scaleway) bucket only ever stores ciphertext, so `public-read` leaks nothing but size. Objects are auto-expired by the `ph-attachments-30d` lifecycle rule.
+Photos are encrypted before upload; the (Scaleway) bucket only ever stores ciphertext, so `public-read` leaks nothing but size. Objects are auto-expired by the `ph-attachments-180d` lifecycle rule.

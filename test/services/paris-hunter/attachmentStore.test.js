@@ -142,7 +142,7 @@ describe('local store (dev/QA fallback)', () => {
     ATTACHMENT_STORE: 'local',
     ATTACHMENTS_DIR: baseDir,
     ATTACHMENTS_PUBLIC_BASE: 'http://127.0.0.1:8787',
-    ATTACHMENTS_RETENTION_DAYS: '30',
+    ATTACHMENTS_RETENTION_DAYS: '180',
   });
 
   it('writes atomically under attachments/ and returns the public URL', async () => {
@@ -163,7 +163,7 @@ describe('local store (dev/QA fallback)', () => {
     await store.upload(Buffer.from('old'), 'old.bin', 'application/octet-stream');
     await store.upload(Buffer.from('fresh'), 'fresh.bin', 'application/octet-stream');
     const oldPath = path.join(baseDir, 'attachments', 'old.bin');
-    const past = new Date(Date.now() - 40 * 24 * 60 * 60 * 1000);
+    const past = new Date(Date.now() - 200 * 24 * 60 * 60 * 1000);
     fs.utimesSync(oldPath, past, past);
 
     const deleted = store.sweepRetention();
