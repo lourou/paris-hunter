@@ -1,0 +1,78 @@
+{
+  "@context": "/contexts/Match",
+  "@id": "/matches/m-0005",
+  "@type": "Match",
+  "property": "/properties/55555555-5555-4555-8555-555555555555",
+  "search": "/searches/424242",
+  "createdAt": "2026-07-08T10:00:05+02:00",
+  "updatedAt": "2026-07-08T10:00:05+02:00",
+  "propertyDocument": {
+    "@context": "/contexts/PropertyDocument",
+    "@id": "/documents/properties/55555555-5555-4555-8555-555555555555",
+    "@type": "PropertyDocument",
+    "uuid": "55555555-5555-4555-8555-555555555555",
+    "title": "Appartement 3 pieces - Charonne",
+    "description": "Bel appartement 3 pieces lumineux au coeur du 11e, sejour traversant, cuisine equipee, proche metro.",
+    "price": 3550,
+    "pricePerMeter": 39.58,
+    "surface": 72,
+    "room": 3,
+    "bedroom": 2,
+    "furnished": false,
+    "transactionType": 1,
+    "propertyType": 0,
+    "expired": false,
+    "createdAt": "2026-07-08T10:00:00+02:00",
+    "updatedAt": "2026-07-08T10:00:00+02:00",
+    "city": {
+      "id": 30931,
+      "insee": "75111",
+      "name": "Paris 11e",
+      "originalName": "Paris 11e",
+      "zipcode": "75011",
+      "department": {
+        "code": "75",
+        "id": 77,
+        "name": "Paris"
+      }
+    },
+    "locations": {
+      "lat": 48.8578,
+      "lon": 2.3841
+    },
+    "pictures": [
+      "https://pictures.notif.immo/properties/2026/07/08/55555555-a.jpg",
+      "https://pictures.notif.immo/properties/2026/07/08/55555555-b.jpg"
+    ],
+    "adverts": [
+      {
+        "uuid": "55555555-ad01-4000-8000-000000000001",
+        "title": "Appartement 3 pieces - Charonne",
+        "description": "Bel appartement 3 pieces lumineux au coeur du 11e, sejour traversant, cuisine equipee, proche metro.",
+        "price": 3550,
+        "rentalCharges": 150,
+        "priceExcludingFees": 3400,
+        "surface": 72,
+        "furnished": false,
+        "url": "https://www.example-portal.fr/annonce/55555555",
+        "createdAt": "2026-07-08T09:55:00+02:00",
+        "updatedAt": "2026-07-08T09:55:00+02:00",
+        "contact": {
+          "agency": "Agence Charonne Immo",
+          "email": "contact@charonne-immo.fr",
+          "name": "A. Martin",
+          "phone": "0612345678",
+          "reference": "REF-2026-011"
+        },
+        "publisher": {
+          "category": "Portails",
+          "name": "ExamplePortal",
+          "type": 1
+        },
+        "pictures": [
+          "https://pictures.notif.immo/properties/2026/07/08/55555555-a.jpg"
+        ]
+      }
+    ]
+  }
+}
