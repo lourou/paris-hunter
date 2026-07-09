@@ -7,6 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import Database from 'better-sqlite3';
 
 // Boot state machine (contract §4) with the heavy edges mocked: outbox (DB),
 // XMTP client factory and the join flow. lock.js / identity.js / health.js run REAL.
@@ -212,20 +213,32 @@ describe('convos adapter boot state machine (contract §4)', () => {
   });
 
   it('a second process on the same data dir exits non-zero (single-writer lock, contract §1)', async () => {
-    // pid 1 is always alive — simulates a live foreign adapter process
-    fs.writeFileSync(path.join(dataDir, 'adapter.lock'), JSON.stringify({ pid: 1 }));
-    indexModule = await import('../../../lib/services/paris-hunter/convos/index.js');
-    await expect(indexModule.initConvosAdapter()).rejects.toThrow('process.exit(1)');
-    indexModule = null; // nothing to shut down
+    const lockPath = path.join(dataDir, 'adapter-lock.sqlite');
+    const blocker = new Database(lockPath);
+    blocker.exec('CREATE TABLE adapter_locks (name TEXT PRIMARY KEY, owner TEXT, acquired_at TEXT)');
+    blocker.exec('BEGIN EXCLUSIVE');
+    try {
+      indexModule = await import('../../../lib/services/paris-hunter/convos/index.js');
+      await expect(indexModule.initConvosAdapter()).rejects.toThrow('process.exit(1)');
+      indexModule = null; // nothing to shut down
+    } finally {
+      blocker.close();
+    }
   });
 
-  it('a STALE lock (dead pid) is reclaimed and boot proceeds', async () => {
-    fs.writeFileSync(path.join(dataDir, 'adapter.lock'), JSON.stringify({ pid: 999999 }));
+  it('a crash-released SQLite lock needs no stale cleanup and boot proceeds', async () => {
+    const lockPath = path.join(dataDir, 'adapter-lock.sqlite');
+    const crashed = new Database(lockPath);
+    crashed.exec('CREATE TABLE adapter_locks (name TEXT PRIMARY KEY, owner TEXT, acquired_at TEXT)');
+    crashed.exec('BEGIN EXCLUSIVE');
+    crashed.close(); // close without COMMIT simulates kernel cleanup + rollback on crash
     writeState({ conversationId: 'conv-existing', inviteTag: 'tag1', joinedAt: '2026-07-09T00:00:00Z' });
     const mod = await boot();
     expect(mod.getAdapterStatus().status).toBe('ready');
-    const lock = JSON.parse(fs.readFileSync(path.join(dataDir, 'adapter.lock'), 'utf8'));
-    expect(lock.pid).toBe(process.pid);
+    expect(fs.existsSync(lockPath)).toBe(true);
+    const contender = new Database(lockPath, { timeout: 0 });
+    expect(() => contender.exec('BEGIN EXCLUSIVE')).toThrow(/locked|busy/i);
+    contender.close();
   });
 
   it('creates identity.json on first run (0600, valid keys) and reuses it afterwards', async () => {

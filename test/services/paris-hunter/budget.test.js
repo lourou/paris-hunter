@@ -28,7 +28,12 @@ vi.mock('../../../lib/services/logger.js', () => ({
 }));
 
 import { insertInbox, getParisHunterMeta, setParisHunterMeta } from '../../../lib/services/paris-hunter/inbox.js';
-import { enforceBudgetDisable, streamEstateApiBase, usageKeyFor } from '../../../lib/services/paris-hunter/budget.js';
+import {
+  budgetThreshold,
+  enforceBudgetDisable,
+  streamEstateApiBase,
+  usageKeyFor,
+} from '../../../lib/services/paris-hunter/budget.js';
 
 const insertOne = (n) =>
   insertInbox({ kind: 'match', externalId: `uuid-${n}`, payload: '{"a":1}', eventAt: Date.now() - 1000 });
@@ -38,6 +43,8 @@ beforeEach(() => {
   logged.info.length = 0;
   logged.warn.length = 0;
   logged.error.length = 0;
+  process.env.PH_MONTHLY_ITEM_BUDGET = '3';
+  delete process.env.PH_BUDGET_HEADROOM;
   delete process.env.STREAM_ESTATE_API_BASE;
 });
 
@@ -58,7 +65,7 @@ describe('usage counter thresholds (v3 A7)', () => {
   });
 
   it('does not re-arm disable_required after a confirmed disable this month', () => {
-    setParisHunterMeta('disable_confirmed', `${usageKeyFor()}:${Date.now()}`);
+    setParisHunterMeta('disable_confirmed', `${usageKeyFor()}:threshold=${budgetThreshold()}:${Date.now()}`);
     insertOne(1);
     insertOne(2);
     insertOne(3);
@@ -100,7 +107,9 @@ describe('enforceBudgetDisable — verified server-side disable (v3 A7)', () => 
     expect(calls.map((c) => c.method)).toEqual(['GET', 'PUT', 'GET']);
     expect(JSON.parse(calls[1].body).notificationEnabled).toBe(false);
     expect(getParisHunterMeta('disable_required')).toBe(null);
-    expect(getParisHunterMeta('disable_confirmed')).toMatch(new RegExp(`^${usageKeyFor()}`));
+    expect(getParisHunterMeta('disable_confirmed')).toMatch(
+      new RegExp(`^${usageKeyFor()}:threshold=${budgetThreshold()}:`),
+    );
   });
 
   it('keeps the flag when the PUT fails, and retries next tick', async () => {
@@ -132,5 +141,52 @@ describe('enforceBudgetDisable — verified server-side disable (v3 A7)', () => 
     const { fetchImpl, calls } = makeFetch({ notificationEnabled: true });
     await enforceBudgetDisable({ fetchImpl });
     expect(calls[0].url).toBe('http://127.0.0.1:9777/searches/99');
+  });
+
+  it('aborts a hung API request within the bound and preserves disable_required', async () => {
+    arm();
+    const fetchImpl = vi.fn(
+      (url, options) =>
+        new Promise((resolve, reject) => {
+          options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+        }),
+    );
+
+    expect(await enforceBudgetDisable({ fetchImpl, timeoutMs: 10 })).toBe(false);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(getParisHunterMeta('disable_required')).toBe('1');
+    expect(logged.error.some((line) => line.includes('timed out'))).toBe(true);
+  });
+
+  it('coalesces overlap into one serialized trailing retry', async () => {
+    arm();
+    let releaseFirst;
+    const firstGate = new Promise((resolve) => {
+      releaseFirst = resolve;
+    });
+    const calls = [];
+    const searchState = { notificationEnabled: true };
+    const fetchImpl = vi.fn(async (url, options = {}) => {
+      const method = options.method ?? 'GET';
+      calls.push(method);
+      if (calls.length === 1) {
+        await firstGate;
+        return { ok: false, status: 503, json: async () => ({}) };
+      }
+      if (method === 'PUT') {
+        searchState.notificationEnabled = false;
+      }
+      return { ok: true, status: 200, json: async () => ({ ...searchState }) };
+    });
+
+    const first = enforceBudgetDisable({ fetchImpl, timeoutMs: 1000 });
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    const overlapping = enforceBudgetDisable({ fetchImpl, timeoutMs: 1000 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    releaseFirst();
+
+    await expect(Promise.all([first, overlapping])).resolves.toEqual([true, true]);
+    expect(calls).toEqual(['GET', 'GET', 'PUT', 'GET']);
+    expect(getParisHunterMeta('disable_required')).toBe(null);
   });
 });

@@ -53,7 +53,11 @@ import {
   computeConfigRev,
   SEARCH_TITLE_PREFIX,
 } from '../../lib/services/paris-hunter/searchConfig.js';
-import { streamEstateApiBase } from '../../lib/services/paris-hunter/budget.js';
+import {
+  assertBudgetAllowsEnable,
+  confirmBudgetReenabled,
+  streamEstateApiBase,
+} from '../../lib/services/paris-hunter/budget.js';
 import { upsertJob } from '../../lib/services/storage/jobStorage.js';
 
 const sameSet = (a, b) => {
@@ -174,6 +178,8 @@ export const runBootstrap = async ({ argv = [], fetchImpl = fetch, env = process
     if (searchId == null) {
       throw new Error('meta searchId missing — run bootstrap.js (reconcile) first');
     }
+    const enableNow = now();
+    assertBudgetAllowsEnable({ env, nowMs: enableNow });
     const remote = await getSearch(fetchImpl, base, env, searchId);
     const mismatches = diffSearch(remote, identityBody);
     if (mismatches.length > 0) {
@@ -183,7 +189,7 @@ export const runBootstrap = async ({ argv = [], fetchImpl = fetch, env = process
     }
 
     // Mint the cutoff NOW (not at seed time) and bind it to search identity.
-    const watermark = { cutoffMs: now(), searchId, configRev };
+    const watermark = { cutoffMs: enableNow, searchId, configRev };
     if (dryRun) {
       summary.actions.push({ action: 'would-write-watermark', watermark });
       summary.actions.push({ action: 'would-enable', searchId });
@@ -199,6 +205,7 @@ export const runBootstrap = async ({ argv = [], fetchImpl = fetch, env = process
     if (verified?.notificationEnabled !== true) {
       throw new Error('verify GET after enable still reports notificationEnabled != true');
     }
+    confirmBudgetReenabled();
     summary.actions.push({ action: 'enabled', searchId });
     summary.searchId = searchId;
     console.log(

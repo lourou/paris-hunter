@@ -22,7 +22,8 @@ vi.mock('../../../lib/services/logger.js', () => ({
 import { runBootstrap, diffSearch } from '../../../tools/paris-hunter/bootstrap.js';
 import { runSeed } from '../../../tools/paris-hunter/seed.js';
 import { buildSearchBody, computeConfigRev, parseWatermark } from '../../../lib/services/paris-hunter/searchConfig.js';
-import { getParisHunterMeta, setParisHunterMeta } from '../../../lib/services/paris-hunter/inbox.js';
+import { getParisHunterMeta, insertInbox, setParisHunterMeta } from '../../../lib/services/paris-hunter/inbox.js';
+import { enforceBudgetDisable, usageKeyFor } from '../../../lib/services/paris-hunter/budget.js';
 
 /**
  * Minimal stateful Stream Estate API fake. Records every call; supports
@@ -91,6 +92,8 @@ const deps = { upsertJob: upsertJobSpy, adminUserId: 'admin-1' };
 beforeEach(() => {
   holder.current = createMemorySqlite();
   upsertJobSpy.mockClear();
+  process.env.PH_MONTHLY_ITEM_BUDGET = '900';
+  delete process.env.PH_BUDGET_HEADROOM;
 });
 
 describe('bootstrap — reconcile mode (v2 #6, v3 A5)', () => {
@@ -197,6 +200,7 @@ describe('bootstrap — --enable-notifications (v3 A5 sequence)', () => {
 
   it('mints the cutoff NOW, bound to searchId + configRev, then enables and verifies', async () => {
     const { state, fetchImpl } = armEnable();
+    setParisHunterMeta('disable_confirmed', 'old-budget-confirmation');
     const summary = await runBootstrap({
       argv: ['--enable-notifications'],
       fetchImpl,
@@ -212,6 +216,7 @@ describe('bootstrap — --enable-notifications (v3 A5 sequence)', () => {
 
     const put = state.calls.find((c) => c.method === 'PUT');
     expect(put.body.notificationEnabled).toBe(true);
+    expect(getParisHunterMeta('disable_confirmed')).toBe(null);
     expect(summary.actions.map((a) => a.action)).toContain('enabled');
     // watermark write precedes the PUT (ordering: step 3 before step 4)
     expect(summary.actions.findIndex((a) => a.action === 'watermark-written')).toBeLessThan(
@@ -223,6 +228,46 @@ describe('bootstrap — --enable-notifications (v3 A5 sequence)', () => {
     const body = identity();
     expect(diffSearch({ ...body, includedZipcodes: [...body.includedZipcodes].reverse() }, body)).toEqual([]);
     expect(diffSearch({ ...body, budgetMax: body.budgetMax + 1 }, body)).toEqual(['budgetMax']);
+  });
+
+  it('refuses enable when current usage is already at the raised effective threshold', async () => {
+    const { state, fetchImpl } = armEnable();
+    const env = { ...process.env, PH_MONTHLY_ITEM_BUDGET: '10', PH_BUDGET_HEADROOM: '0.9' };
+    setParisHunterMeta(usageKeyFor(FIXED_NOW), '9');
+
+    await expect(
+      runBootstrap({ argv: ['--enable-notifications'], fetchImpl, env, deps: { ...deps, now: () => FIXED_NOW } }),
+    ).rejects.toThrow(/current usage 9.*threshold 9/);
+    expect(state.calls.filter((call) => call.method === 'PUT')).toHaveLength(0);
+    expect(getParisHunterMeta('disable_confirmed')).toBe(null);
+  });
+
+  it('trip → raise → verified enable → trip again in the same month', async () => {
+    process.env.PH_MONTHLY_ITEM_BUDGET = '3';
+    const { fetchImpl } = armEnable();
+    const insert = (id) =>
+      insertInbox({ kind: 'match', externalId: `budget-${id}`, payload: '{}', eventAt: FIXED_NOW });
+
+    insert(1);
+    insert(2);
+    insert(3);
+    expect(getParisHunterMeta('disable_required')).toBe('1');
+    await expect(enforceBudgetDisable({ fetchImpl, nowMs: FIXED_NOW })).resolves.toBe(true);
+    expect(getParisHunterMeta('disable_required')).toBe(null);
+    expect(getParisHunterMeta('disable_confirmed')).not.toBe(null);
+
+    process.env.PH_MONTHLY_ITEM_BUDGET = '5';
+    await runBootstrap({
+      argv: ['--enable-notifications'],
+      fetchImpl,
+      deps: { ...deps, now: () => FIXED_NOW },
+    });
+    expect(getParisHunterMeta('disable_confirmed')).toBe(null);
+
+    insert(4);
+    expect(getParisHunterMeta('disable_required')).toBe(null);
+    insert(5);
+    expect(getParisHunterMeta('disable_required')).toBe('1');
   });
 });
 

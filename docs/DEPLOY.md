@@ -107,11 +107,11 @@ docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/boot
 # 4. Seed — marks the current market as seen and persists the notify watermark
 docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/seed.js
 
-# 5. Enable notifications — REFUSES to run if no watermark exists
-docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/bootstrap.js --enable-notifications
-
-# 6. Start the stack
+# 5. Start the receiver stack BEFORE enablement
 docker compose -f deploy/compose.yml up -d
+
+# 6. Enable notifications — health-probes the running receiver and REFUSES if unavailable
+docker compose -f deploy/compose.yml exec fredy node tools/paris-hunter/bootstrap.js --enable-notifications
 
 # 7. AC2 silent check: watch logs — webhook deliveries must be suppressed
 #    (decision 'suppressed:watermark'/'suppressed:unseeded'), ZERO group messages.
@@ -142,10 +142,15 @@ corrupt the client state, and sqlite is single-writer. Concretely:
   ```
 
 - `stop_grace_period: 30s` gives the adapter time to finish an in-flight send and close the XMTP
-  client on SIGTERM. If a container is SIGKILLed, boot recovers: the flock dies with the process,
+  client on SIGTERM. If a container is SIGKILLed, boot recovers: the dedicated SQLite lock holds a
+  kernel-enforced `BEGIN EXCLUSIVE` transaction that dies with the process,
   leases expire, and the outbox state machine resends anything not confirmed sent (a crash exactly
   between a network send and its state write may produce ONE duplicate message — documented
   residual, preferred over loss).
+- The lock database stays on disk by design; never delete it while Fredy is running. SQLite file
+  locking requires a local Docker volume/filesystem with working POSIX locks. If forced onto a
+  network filesystem whose SQLite locks are unreliable, use an external host `flock` wrapper as
+  the deployment-level fallback; do not fall back to PID files or `O_EXCL` stale-file cleanup.
 
 ## 7. Budget ceiling (Stream Estate PAYG)
 
@@ -153,11 +158,13 @@ corrupt the client state, and sqlite is single-writer. Concretely:
 counter (`usage:<YYYY-MM>` in `paris_hunter_meta`, incremented per accepted webhook item):
 
 - ≥ 70%: WARN logs.
-- 100%: the app **auto-disables the saved search** (PUT `notificationEnabled:false` on the Stream
-  Estate side) and logs loudly. Webhooks stop arriving; nothing is lost locally.
+- 90% by default (`PH_BUDGET_HEADROOM=0.9`): the app **auto-disables the saved search** (PUT
+  `notificationEnabled:false` on the Stream Estate side) and logs loudly. Webhooks stop arriving;
+  nothing is lost locally.
 - To re-enable after a trip: raise `PH_MONTHLY_ITEM_BUDGET` in `.env` (or wait for the month to
-  roll over), restart, then run
-  `docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/bootstrap.js --enable-notifications`.
+  roll over), restart, then run the enable command from §5. Enablement is refused while current
+  usage is already at or above the new effective threshold; a verified enable clears the prior
+  disable confirmation so the raised threshold can trip again later in the same month.
 - The counter is a proxy for billed items until billing semantics are confirmed (E.1). On day 1,
   compare the meta counter with the Stream Estate dashboard and adjust the ceiling (E.9).
   Investigate if usage trends past ~700 items/month (realistic estimate is 90–620).
@@ -177,6 +184,11 @@ curl "https://api.stream.estate/webhook-tester?endpoint=https://<domain>/api/web
 If deliveries go silent later, check Caddy logs for 403s first — Stream Estate rotating its egress
 IP (`144.76.91.183` today) would surface exactly like that; update the `remote_ip` allowlist.
 The secret path alone still gates the app if you must temporarily widen the allowlist.
+
+`--enable-notifications` probes the GET-only health route from the running `fredy` container. The
+production Caddyfile allows Docker/private/localhost sources separately from Stream Estate POSTs.
+If your domain hairpins through the VPS public interface, add that exact VPS/operator source IP to
+`@webhook_health`; never broaden the delivery POST allowlist for this probe.
 
 ## 9. XMTP environments
 
