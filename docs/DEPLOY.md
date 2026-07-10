@@ -1,7 +1,8 @@
 # paris-hunter — VPS deploy runbook
 
 What this deploys: a single-VPS docker-compose stack — Fredy (fork, API-only, no Chromium) behind
-Caddy (TLS + webhook IP allowlist). Stream Estate pushes webhooks in; the convos adapter posts
+Caddy (TLS + webhook IP allowlist; the admin UI is NOT internet-exposed — it is reached over
+Tailscale only, see §12). Stream Estate pushes webhooks in; the convos adapter posts
 scored listings to an XMTP group; photo ciphertext blobs are uploaded to Scaleway Object Storage
 and served from there (Caddy has NO attachments route).
 
@@ -13,8 +14,9 @@ Stream Estate ──POST /api/webhook/stream-estate/<secret>/{match,event}──
 
 ## 1. Prerequisites
 
-- VPS with `docker` + `docker compose` v2.
-- A domain with a DNS A record → the VPS IP (Caddy gets Let's Encrypt certs automatically).
+- VPS with `docker` + `docker compose` v2 (Hetzner box, on the tailnet as `playground`,
+  Tailscale IP `100.117.62.55`).
+- DNS A record `hunter.10u15.net` → the VPS IP (Caddy gets Let's Encrypt certs automatically).
 - The Scaleway bucket `paris-hunter` exists in `fr-par` (user-owned; nothing here creates it).
 - Stream Estate billing confirmed (go-live checklist E.1) — until then, keep `bootstrap.js` in
   `--dry-run` and fire only fixtures.
@@ -173,12 +175,13 @@ counter (`usage:<YYYY-MM>` in `paris_hunter_meta`, incremented per accepted webh
 ## 8. Webhook reachability check (go-live E.4)
 
 ```bash
-# From a random IP (e.g. your laptop): expect 403 (Caddy IP allowlist)
+# From a random IP (e.g. your laptop): expect 403 (Caddy IP allowlist).
+# (Any non-webhook path returns 404 — the admin UI is not served here, see §12.)
 curl -s -o /dev/null -w '%{http_code}\n' -X POST \
-  "https://<domain>/api/webhook/stream-estate/$STREAM_ESTATE_WEBHOOK_SECRET/match"
+  "https://hunter.10u15.net/api/webhook/stream-estate/$STREAM_ESTATE_WEBHOOK_SECRET/match"
 
 # From Stream Estate's tester (AFTER billing confirmation E.1 — tester calls may bill):
-curl "https://api.stream.estate/webhook-tester?endpoint=https://<domain>/api/webhook/stream-estate/$STREAM_ESTATE_WEBHOOK_SECRET/match" \
+curl "https://api.stream.estate/webhook-tester?endpoint=https://hunter.10u15.net/api/webhook/stream-estate/$STREAM_ESTATE_WEBHOOK_SECRET/match" \
   -H "X-API-KEY: $STREAM_ESTATE_API_KEY"
 ```
 
@@ -232,20 +235,57 @@ cloudflared:
   command: tunnel --no-autoupdate run --token ${CLOUDFLARED_TUNNEL_TOKEN}
   depends_on:
     - fredy
-# In the Cloudflare Zero Trust dashboard: public hostname <domain> → http://fredy:9998
+# In the Cloudflare Zero Trust dashboard: public hostname hunter.10u15.net → http://fredy:9998
 ```
 
 Caveat (why Caddy is the default): Cloudflare terminates TLS at its edge, so an in-stack
-`remote_ip` check would see Cloudflare edge IPs, not Stream Estate's. The `144.76.91.183`
-allowlist must then move to a Cloudflare WAF/Access policy (match on the true client IP) — or you
-accept the secret path as the only gate. Also protect the Fredy UI with Cloudflare Access if you
-drop Caddy's basic auth.
+`remote_ip` check would see Cloudflare edge IPs, not Stream Estate's. Behind a tunnel the
+source-IP allowlist is therefore LOST: either recreate it as a Cloudflare WAF/Access policy
+(match on the true client IP), or accept that the secret path becomes the only gate. The admin
+UI stays Tailscale-only either way (§12) — do not add a public hostname for it.
 
-## 12. Day-1 checklist
+## 12. Admin UI over Tailscale
+
+The Fredy admin UI is NOT internet-exposed: Caddy serves only the webhook paths (everything else
+gets a 404). The UI is reached over the tailnet via `tailscale serve`, which terminates HTTPS
+with a real Let's Encrypt certificate (issued through Tailscale's DNS-01 flow for
+`*.ts.net` names) and proxies to the loopback-only port published by compose
+(`127.0.0.1:9998`, see `deploy/compose.yml`).
+
+Prerequisites:
+
+- **MagicDNS** and **HTTPS certificates** enabled in the Tailscale admin console (DNS page).
+- The VPS is already on the tailnet as `playground` (Tailscale IP `100.117.62.55`).
+
+On the VPS:
+
+```bash
+tailscale serve --bg http://127.0.0.1:9998
+```
+
+The UI is then at `https://playground.fold-rooster.ts.net` (general form:
+`https://<machine>.<tailnet>.ts.net`; the tailnet name shows in the command's output and in the
+admin console).
+
+**Auth note:** with the tailnet as the network gate, Fredy's own login is now the only
+application-level auth layer — change the default `admin`/`admin` password immediately after
+first boot.
+
+To undo: `tailscale serve reset`.
+
+### Firewall
+
+- **80/443 public** — webhook only (IP allowlist + secret path; every other path is a 404).
+- **22 (SSH)** — optionally Tailscale-only: once SSH over the tailnet is confirmed working,
+  close 22 publicly. **Test first from a second session** (keep your current one open) before
+  touching the firewall, or you can lock yourself out.
+- Nothing else needs to be open: `9998` is bound to `127.0.0.1` and is never publicly reachable.
+
+## 13. Day-1 checklist
 
 - Compare Stream Estate dashboard usage vs the meta `usage:<month>` counter; set/adjust
   `PH_MONTHLY_ITEM_BUDGET` (§7, E.9).
-- Change the Fredy admin password from `admin`/`admin` (the UI is behind Caddy basic auth, but
-  still).
+- Change the Fredy admin password from `admin`/`admin` (the UI is Tailscale-only, but Fredy's
+  login is now the only auth layer — see §12).
 - Confirm ZERO notifications happened before `--enable-notifications` (AC2) and that the first
   organic match after it lands in the group.
