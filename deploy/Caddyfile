@@ -1,8 +1,13 @@
 # paris-hunter — production Caddyfile.
-# Replace hunter.example.com with your real domain (DNS A record → VPS IP).
-# TLS certificates are automatic (Let's Encrypt) once DNS resolves.
+# fredy.example.com (DNS A record → VPS IP). TLS certificates are automatic
+# (Let's Encrypt) once DNS resolves.
+#
+# This vhost serves ONLY the Stream Estate webhook. The Fredy admin UI is NOT
+# internet-exposed: it is reached over Tailscale via `tailscale serve` against
+# the loopback-only port mapping (see deploy/compose.yml and docs/DEPLOY.md
+# "Admin UI over Tailscale").
 
-hunter.example.com {
+fredy.example.com {
 	# --- Stream Estate webhook ---------------------------------------------
 	# Two factors: IP allowlist here (Stream Estate egress IP) + the secret
 	# path segment checked in-app (timingSafeEqual). While testing against the
@@ -35,14 +40,13 @@ hunter.example.com {
 		respond 403
 	}
 
-	# --- Fredy admin UI ----------------------------------------------------
-	# Basic auth protects the UI from the open internet. Generate the hash:
-	#   docker run --rm caddy:2 caddy hash-password --plaintext 'your-password'
+	# --- Everything else: nothing to see ------------------------------------
+	# The admin UI is deliberately NOT proxied here — it is Tailscale-only.
+	# 404 (not 403) so the public surface doesn't advertise that anything
+	# gated exists at this host; the webhook paths above keep their distinct
+	# 403 for allowlist diagnostics.
 	handle {
-		basic_auth {
-			admin <bcrypt-hash>
-		}
-		reverse_proxy fredy:9998
+		respond 404
 	}
 
 	# NOTE: no /attachments route on purpose — photo ciphertext blobs are

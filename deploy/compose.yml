@@ -27,8 +27,11 @@ services:
       - fredy-conf:/conf # fredy config.json (generated on first boot)
       - convos-data:/data/convos # XMTP identity + adapter state — back up WITH fredy-db
     stop_grace_period: 30s # SIGTERM → finish in-flight send, close XMTP client
-    # NO ports: only Caddy is internet-facing; fredy:9998 is reachable on the
-    # compose network only.
+    # Only Caddy is internet-facing. The single mapping below binds to the
+    # host loopback only: reached by `tailscale serve` (admin UI over the
+    # tailnet, see docs/DEPLOY.md), never internet-exposed.
+    ports:
+      - '127.0.0.1:9998:9998'
 
   caddy:
     image: caddy:2

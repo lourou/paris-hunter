@@ -58,8 +58,9 @@ Price-decrease events on a known listing re-notify once, with a distinct
 ## Ops
 
 **`docs/DEPLOY.md` is the source of truth** — VPS runbook (docker-compose stack,
-Fredy behind Caddy with TLS + webhook IP allowlist, exact first-boot order that
-guarantees the silent first run, single-writer discipline, backup/restore).
+Fredy behind Caddy with TLS + webhook IP allowlist — the admin UI is Tailscale-only,
+never internet-exposed — exact first-boot order that guarantees the silent first
+run, single-writer discipline, backup/restore).
 
 - `docs/QA.md` — QA harness, failpoint kill matrix, acceptance matrix, live E2E runbook.
 - `docs/BRIEF-paris-hunter.md` — original product brief.
