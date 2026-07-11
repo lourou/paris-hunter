@@ -115,9 +115,14 @@ then at `https://playground.fold-rooster.ts.net` — change `admin`/`admin` imme
 
 ### 0.8 ⚠️ STOP — billing gate
 
-Go NO further until Stream Estate support chat confirms the billing definition of an "item"
+Billing definition of an "item" — CONFIRMED THE HARD WAY (dashboard, 2026-07-11): **every item
+in every API response bills, duplicates included** (see §7 cost note; the naive paginated seed
+billed 11,580 items for 450 unique listings ≈ −€133). Reconfirm anything else with support chat
 (go-live E.1); then run §5 steps 3 (`bootstrap.js`), 4 (`seed.js --confirm-live`) and
 6 (`--enable-notifications`), plus the group-invite flow (§5, §9).
+
+⚠️ The receiver must be STOPPED for step 4: `seed.js` REFUSES to run while `fredy` is up
+(`docker compose stop fredy` first — §5 order, §6 discipline).
 
 To change the `PH_*` search parameters after go-live, follow §7bis.
 
@@ -220,9 +225,15 @@ docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/boot
 # 3. Real bootstrap — creates/reconciles the saved search with notifications DISABLED
 docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/bootstrap.js
 
-# 4. Seed — marks the current market as seen and persists the notify watermark
-#    (--confirm-live is the deliberate consent gate for the billable live poll — seed.js
-#    refuses to poll without it)
+# 4. Seed — marks the current market as seen and persists meta seededAt (the notify
+#    watermark is minted later, at enable time — step 6).
+#    ⚠️ The receiver must be STOPPED here (it is: it has not started yet). seed.js REFUSES
+#    to run while fredy is up — stop it first: docker compose stop fredy.
+#    --confirm-live is the deliberate consent gate for the billable live poll — seed.js
+#    refuses to poll without it. It walks fromDate/toDate windows (NEVER page=N — the live
+#    API bills every response item incl. duplicates, see §7), prints per-page progress with
+#    a running € estimate, and ABORTS past max(3× uniques, PH_SEED_MAX_ITEMS [default 2000])
+#    billed items so a misbehaving API cannot burn the account (incident 2026-07-11).
 docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/seed.js --confirm-live
 
 # 5. Start the receiver stack BEFORE enablement
@@ -258,6 +269,11 @@ corrupt the client state, and sqlite is single-writer. Concretely:
 
 - **Never** `docker compose up --scale fredy=2`, never a second compose project on the same
   volumes, never `docker compose run` a tool that opens XMTP while the main container runs.
+- `seed.js` enforces this itself: it REFUSES to start while the receiver is detected (adapter
+  lock held, or the `fredy` service answering HTTP). `bootstrap.js` legitimately runs alongside
+  the receiver (`--enable-notifications`, §7bis) — all tools now fail FAST (seconds) with a
+  "stop it first: docker compose stop fredy" message on sqlite contention instead of a raw
+  'database is locked'.
 - Upgrades are **stop-then-start**, not rolling:
 
   ```bash
@@ -291,9 +307,25 @@ counter (`usage:<YYYY-MM>` in `paris_hunter_meta`, incremented per accepted webh
   roll over), restart, then run the enable command from §5. Enablement is refused while current
   usage is already at or above the new effective threshold; a verified enable clears the prior
   disable confirmation so the raised threshold can trip again later in the same month.
-- The counter is a proxy for billed items until billing semantics are confirmed (E.1). On day 1,
-  compare the meta counter with the Stream Estate dashboard and adjust the ceiling (E.9).
-  Investigate if usage trends past ~700 items/month (realistic estimate is 90–620).
+- The counter is a proxy for billed items. On day 1, compare the meta counter with the Stream
+  Estate dashboard and adjust the ceiling (E.9). Investigate if usage trends past ~700
+  items/month (realistic estimate is 90–620).
+
+**Cost note — billing semantics OBSERVED on the dashboard (2026-07-11), superseding the recon
+assumptions:**
+
+- An "item" is **every item returned in every response, duplicates included** — re-fetching a
+  listing bills it again. There is no billing dedupe on re-fetch.
+- `/documents/properties` responses carried **~58 items despite `itemsPerPage=30`** (documented
+  max is 30) — never trust the requested page size for cost estimates.
+- `page=N` pagination overlaps (no strict cursor): the original seed walk re-fetched ~450 unique
+  listings ~25x each → **11,580 items billed ≈ −€133**. That is why `seed.js` walks
+  **`fromDate`/`toDate` windows ordered by `createdAt`** (boundary timestamp group re-fetched at
+  most once) and carries a **hard billing guard**: it aborts past
+  `max(3 × uniques, PH_SEED_MAX_ITEMS [default 2000])` billed items, printing a running € estimate
+  per page (~€0.01/item).
+- `seed.js` is the ONLY code path that polls a billable endpoint; the receiver only ingests
+  pushed webhooks and `bootstrap.js`/`budget.js` touch `/searches` management endpoints only.
 
 ## 7bis. Changing search parameters later
 

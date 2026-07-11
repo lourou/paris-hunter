@@ -174,6 +174,11 @@ export const runBootstrap = async ({ argv = [], fetchImpl = fetch, env = process
   const identityBody = buildSearchBody({ env });
   const configRev = computeConfigRev(identityBody);
   const summary = { mode: enableMode ? 'enable' : 'reconcile', dryRun, actions: [], searchId: null, configRev };
+  // Immediate start line — BEFORE any network/DB await, so a stalled call can
+  // never look like a dead process (same class as the seed.js 2026-07-11 fix).
+  console.log(
+    `paris-hunter bootstrap: starting — mode=${summary.mode}${dryRun ? ' (dry-run)' : ''}, base=${base}, configRev=${configRev.slice(0, 12)}…`,
+  );
 
   if (enableMode) {
     // ---- v3 A5 enable sequence — the ONLY path that sets notificationEnabled:true
@@ -337,12 +342,15 @@ const isDirectRun = (() => {
 })();
 
 if (isDirectRun) {
-  const { initToolContext } = await import('./lib/bootContext.js');
-  await initToolContext();
+  const { initToolContext, withReceiverHint } = await import('./lib/bootContext.js');
   try {
+    // NO requireReceiverStopped here: --enable-notifications and the §7bis
+    // reconcile legitimately run alongside the receiver. Contention still
+    // fails fast via the tool busy_timeout + receiver hint.
+    await initToolContext();
     await runBootstrap({ argv: process.argv.slice(2) });
   } catch (error) {
-    console.error(`paris-hunter bootstrap: FAILED — ${error.message}`);
+    console.error(`paris-hunter bootstrap: FAILED — ${withReceiverHint(error).message}`);
     process.exit(1);
   }
 }

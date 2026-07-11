@@ -4,7 +4,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { createMemorySqlite, mockSqliteConnection } from './memoryDb.js';
 
 const holder = vi.hoisted(() => ({ current: null }));
@@ -55,8 +55,21 @@ const serializeSearch = (stored) => {
  * Minimal stateful Stream Estate API fake. Records every call; supports
  * GET/POST /searches, GET/PUT /searches/{id}, GET /documents/properties and
  * the receiver health URL.
+ *
+ * /documents/properties mirrors the LIVE billing contract (incident
+ * 2026-07-11): every item in every response bills, `responsePageSize` items
+ * come back regardless of itemsPerPage, fromDate/toDate are inclusive on
+ * createdAt, hydra:totalItems counts the whole filtered window.
+ * `ignoreDateFilters` emulates the worst-case API that re-returns the same
+ * items no matter the window (what the billing guard must catch).
  */
-const makeApi = ({ searches = [], healthStatus = 200, documentsPages = [] } = {}) => {
+const makeApi = ({
+  searches = [],
+  healthStatus = 200,
+  documents = [],
+  responsePageSize = 58,
+  ignoreDateFilters = false,
+} = {}) => {
   const state = { searches: new Map(searches.map((s) => [s['@id'], s])), calls: [], nextId: 100 };
   const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
 
@@ -94,8 +107,20 @@ const makeApi = ({ searches = [], healthStatus = 200, documentsPages = [] } = {}
       return json(serializeSearch(updated));
     }
     if (pathname === '/documents/properties' && method === 'GET') {
-      const page = Number(searchParams.get('page') ?? '1');
-      return json({ 'hydra:member': documentsPages[page - 1] ?? [] });
+      if (ignoreDateFilters) {
+        return json({
+          'hydra:member': documents.slice(0, responsePageSize),
+          'hydra:totalItems': documents.length + responsePageSize, // always looks truncated
+        });
+      }
+      const fromDate = searchParams.get('fromDate');
+      const toDate = searchParams.get('toDate');
+      const fromMs = fromDate != null ? Date.parse(fromDate) : -Infinity;
+      const toMs = toDate != null ? Date.parse(toDate) : Infinity;
+      const window = documents
+        .filter((d) => Date.parse(d.createdAt) >= fromMs && Date.parse(d.createdAt) <= toMs)
+        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      return json({ 'hydra:member': window.slice(0, responsePageSize), 'hydra:totalItems': window.length });
     }
     return json({ error: `unrouted ${method} ${url}` }, 500);
   });
@@ -365,10 +390,26 @@ describe('seed (v2 lane 2, v3 A5 — seededAt only, no watermark)', () => {
     { uuid: 'aaaaaaaa-0000-4000-8000-000000000002', createdAt: '2026-07-02T10:00:00+02:00' },
   ];
 
+  const docAt = (i, createdAt) => ({ uuid: `dddddddd-0000-4000-8000-${String(i).padStart(12, '0')}`, createdAt });
+
   const armSeed = (extra = {}) => {
     setParisHunterMeta('searchId', '/searches/1');
-    return makeApi({ searches: [ownedSearch('/searches/1', extra.searchState)], documentsPages: [seedDocs] });
+    return makeApi({
+      searches: [ownedSearch('/searches/1', extra.searchState)],
+      documents: extra.documents ?? seedDocs,
+      responsePageSize: extra.responsePageSize ?? 58,
+      ignoreDateFilters: extra.ignoreDateFilters ?? false,
+    });
   };
+
+  let logSpy;
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+  const logged = () => logSpy.mock.calls.map((c) => c.join(' '));
 
   it('refuses while the search is not verifiably DISABLED', async () => {
     const { fetchImpl } = armSeed({ searchState: { notificationEnabled: true } });
@@ -409,5 +450,113 @@ describe('seed (v2 lane 2, v3 A5 — seededAt only, no watermark)', () => {
     const { fetchImpl } = armSeed();
     await expect(runSeed({ argv: ['--no-poll'], fetchImpl })).rejects.toThrow(/--force/);
     await expect(runSeed({ argv: ['--no-poll', '--force'], fetchImpl })).resolves.toBeTruthy();
+  });
+
+  describe('billable pagination — date-window walk, NEVER page=N (live incident 2026-07-11)', () => {
+    const T = (h) => `2026-06-01T${String(h).padStart(2, '0')}:00:00.000Z`;
+
+    it('walks fromDate windows to completion; boundary timestamp group is re-fetched ONCE, whole windows never', async () => {
+      // a(t1), b(t2), c(t2), d(t3), page size 3: window 2 restarts AT t2
+      // (boundary group b,c re-billed once, deduped locally), then totalItems
+      // says exhausted.
+      const docs = [docAt(1, T(1)), docAt(2, T(2)), docAt(3, T(2)), docAt(4, T(3))];
+      const { state, fetchImpl } = armSeed({ documents: docs, responsePageSize: 3 });
+      const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
+
+      const polls = state.calls.filter((c) => c.url.includes('/documents/properties'));
+      expect(polls).toHaveLength(2);
+      for (const call of polls) {
+        expect(call.url).not.toContain('page=');
+        expect(call.url).toContain(encodeURIComponent('order[createdAt]') + '=asc');
+        expect(call.url).toContain('toDate=');
+      }
+      expect(polls[0].url).not.toContain('fromDate=');
+      expect(polls[1].url).toContain(`fromDate=${encodeURIComponent(T(2))}`);
+
+      expect(summary.seeded).toBe(4); // every unique marked exactly once
+      expect(summary.itemsReturned).toBe(6); // 3 + 3 (b,c re-billed at the boundary)
+      expect(summary.pages).toBe(2);
+      expect(holder.current.query('SELECT COUNT(1) AS c FROM ph_seen')[0].c).toBe(4);
+      expect(getParisHunterMeta('seededAt')).toMatch(/^\d+$/);
+    });
+
+    it('multi-window walk marks every unique exactly once and advances strictly', async () => {
+      const docs = [1, 2, 3, 4, 5].map((i) => docAt(i, T(i)));
+      const { state, fetchImpl } = armSeed({ documents: docs, responsePageSize: 2 });
+      const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
+
+      expect(summary.seeded).toBe(5);
+      expect(summary.pages).toBe(4); // [1,2] [2,3] [3,4] [4,5] — 1-item boundary overlap each
+      expect(summary.itemsReturned).toBe(8);
+      const fromDates = state.calls
+        .filter((c) => c.url.includes('/documents/properties'))
+        .map((c) => new URL(c.url).searchParams.get('fromDate'));
+      expect(fromDates).toEqual([null, T(2), T(3), T(4)]); // strictly increasing, no window repeated
+    });
+
+    it('handles a full response sharing ONE timestamp: steps 1s past it with a warning instead of re-pulling forever', async () => {
+      const docs = [docAt(1, T(1)), docAt(2, T(1)), docAt(3, T(1)), docAt(4, T(1))];
+      const { fetchImpl } = armSeed({ documents: docs, responsePageSize: 2 });
+      const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
+
+      expect(summary.pages).toBe(1); // second window (t1+1s) is empty — terminated
+      expect(summary.seeded).toBe(2); // the 2 same-second overflow docs are unreachable, by design
+      expect(logged().some((l) => l.includes('WARNING') && l.includes('shares createdAt'))).toBe(true);
+      expect(getParisHunterMeta('seededAt')).toMatch(/^\d+$/);
+    });
+
+    it('BILLING GUARD aborts (without seededAt) when the API re-returns items past max(3x uniques, PH_SEED_MAX_ITEMS)', async () => {
+      const docs = [1, 2, 3, 4, 5, 6].map((i) => docAt(i, T(i)));
+      const { fetchImpl } = armSeed({ documents: docs, responsePageSize: 6, ignoreDateFilters: true });
+      const env = { ...process.env, PH_SEED_MAX_ITEMS: '10' };
+
+      await expect(runSeed({ argv: ['--confirm-live'], fetchImpl, env })).rejects.toThrow(/BILLING GUARD/);
+      // threshold = max(3×6, 10) = 18 → tripped at 24 billed items (4th window)
+      expect(getParisHunterMeta('seededAt')).toBe(null);
+    });
+  });
+
+  describe('progress output (silent-run fix, live incident 2026-07-11)', () => {
+    const T = (h) => `2026-06-01T${String(h).padStart(2, '0')}:00:00.000Z`;
+
+    it('prints a start line BEFORE any network call, then per-page progress, then a completion line', async () => {
+      const docs = [1, 2, 3].map((i) => docAt(i, T(i)));
+      const { fetchImpl } = armSeed({ documents: docs, responsePageSize: 2 });
+      let logsAtFirstFetch = null;
+      const observingFetch = (...a) => {
+        logsAtFirstFetch ??= logged();
+        return fetchImpl(...a);
+      };
+      await runSeed({ argv: ['--confirm-live'], fetchImpl: observingFetch });
+
+      // start line was already out when the FIRST request left
+      expect(logsAtFirstFetch.some((l) => /^paris-hunter seed: starting — mode=poll/.test(l))).toBe(true);
+      expect(logsAtFirstFetch[0]).toMatch(/base=.+zips=.+budget=.+rooms=.+itemGuard=/);
+
+      const lines = logged();
+      expect(
+        lines.some((l) =>
+          /page 1 — 2 items returned, 2 new listings marked seen — running total: 2 unique, 2 items billed ≈ €0\.02/.test(
+            l,
+          ),
+        ),
+      ).toBe(true);
+      expect(lines.some((l) => /page 2 — .+ running total: 3 unique, 4 items billed ≈ €0\.04/.test(l))).toBe(true);
+      expect(
+        lines.some((l) =>
+          /done — 3 new seen key\(s\) across 2 window\(s\), 4 items billed ≈ €0\.04.*seededAt written/.test(l),
+        ),
+      ).toBe(true);
+    });
+
+    it('--dry-run announces the window walk and the guard without touching /documents', async () => {
+      const { state, fetchImpl } = armSeed();
+      const summary = await runSeed({ argv: ['--dry-run'], fetchImpl });
+
+      expect(summary.dryRun).toBe(true);
+      expect(state.calls.some((c) => c.url.includes('/documents/'))).toBe(false);
+      expect(logged().some((l) => l.includes('[dry-run] would walk date windows'))).toBe(true);
+      expect(getParisHunterMeta('seededAt')).toBe(null);
+    });
   });
 });
