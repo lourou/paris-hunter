@@ -21,6 +21,16 @@
  *   GET  /__requests          -> QA introspection: every recorded request (method, url, body)
  *   POST /__reset             -> clears state
  *
+ * READ CONTRACT (mirrors the LIVE API, observed 2026-07-11 — see
+ * test/services/paris-hunter/fixtures/stream-estate-search-echo.json): the
+ * real Stream Estate API is NOT a faithful echo. Every read (GET single, GET
+ * collection, POST/PUT response bodies):
+ *   - drops `roomMax` / `bedroomMax` / `includedZipcodes` (write-only params),
+ *   - resolves `includedZipcodes` to `includedCities`: City objects carrying a
+ *     string `zipcode` (plus @id/@type/insee/name...).
+ * This mock stores what was written but serializes reads the same way, so the
+ * offline suite exercises the real divergence.
+ *
  * DEPENDENCY (flagged to lane 2): the server under test must let QA point its
  * Stream Estate base URL here (e.g. STREAM_ESTATE_API_BASE env). Until that
  * override exists, the drill asserts only the offline-observable half (usage
@@ -33,6 +43,7 @@ const args = process.argv.slice(2);
 const port = args.includes('--port') ? Number(args[args.indexOf('--port') + 1]) : 8998;
 
 let requests = [];
+// Stored in WRITE shape (may hold includedZipcodes/roomMax); reads serialize.
 let search = {
   '@id': '/searches/qa-search',
   '@type': 'Search',
@@ -40,6 +51,24 @@ let search = {
   notificationEnabled: true,
   token: 'qa-token',
   createdAt: new Date().toISOString(),
+};
+
+/** Fake City resolution for a zipcode (real shape, QA values). */
+const cityFor = (zip) => ({
+  '@id': `/cities/qa-${zip}`,
+  '@type': 'City',
+  zipcode: String(zip),
+  insee: `751${String(zip).slice(-2)}`,
+  article: '',
+  name: `Paris ${Number(String(zip).slice(-2))}e`,
+  libelle: 'PARIS',
+});
+
+/** Real read contract: strip write-only params, resolve zipcodes to cities. */
+const serializeSearch = (stored) => {
+  const { roomMax, bedroomMax, includedZipcodes, ...rest } = stored; // eslint-disable-line no-unused-vars
+  const includedCities = includedZipcodes != null ? includedZipcodes.map(cityFor) : (rest.includedCities ?? []);
+  return { ...rest, includedCities };
 };
 
 const readBody = (request) =>
@@ -75,16 +104,16 @@ const server = http.createServer(async (request, response) => {
   }
   if (request.url?.startsWith('/searches')) {
     if (request.method === 'GET' && request.url === '/searches') {
-      return send(200, { 'hydra:member': [search], 'hydra:totalItems': 1 });
+      return send(200, { 'hydra:member': [serializeSearch(search)], 'hydra:totalItems': 1 });
     }
-    if (request.method === 'GET') return send(200, search);
+    if (request.method === 'GET') return send(200, serializeSearch(search));
     if (request.method === 'PUT') {
       search = { ...search, ...(parsed ?? {}) };
-      return send(200, search);
+      return send(200, serializeSearch(search));
     }
     if (request.method === 'POST') {
       search = { ...search, ...(parsed ?? {}) };
-      return send(201, search);
+      return send(201, serializeSearch(search));
     }
   }
   return send(404, { error: 'not found' });

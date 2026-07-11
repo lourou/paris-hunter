@@ -3,6 +3,7 @@
  * Licensed under Apache-2.0 with Commons Clause and Attribution/Naming Clause
  */
 
+import { readFileSync } from 'node:fs';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { createMemorySqlite, mockSqliteConnection } from './memoryDb.js';
 
@@ -26,6 +27,31 @@ import { getParisHunterMeta, insertInbox, setParisHunterMeta } from '../../../li
 import { enforceBudgetDisable, usageKeyFor } from '../../../lib/services/paris-hunter/budget.js';
 
 /**
+ * Fake City resolution for a zipcode (real shape, test values — the live API
+ * returns real /cities/<id> IRIs; only the string `zipcode` matters to verify).
+ */
+const cityFor = (zip) => ({
+  '@id': `/cities/test-${zip}`,
+  '@type': 'City',
+  zipcode: String(zip),
+  insee: `751${String(zip).slice(-2)}`,
+  name: `Paris ${Number(String(zip).slice(-2))}e`,
+});
+
+/**
+ * Real Stream Estate READ contract (observed live 2026-07-11; the docs'
+ * response examples agree — see fixtures/stream-estate-search-echo.json):
+ * reads are NOT a faithful echo. `roomMax`/`bedroomMax`/`includedZipcodes` are
+ * write-only and dropped; zipcodes come back resolved as `includedCities`
+ * City objects. The fake stores WRITE shape and serializes every response.
+ */
+const serializeSearch = (stored) => {
+  const { roomMax, bedroomMax, includedZipcodes, ...rest } = stored; // eslint-disable-line no-unused-vars
+  const includedCities = includedZipcodes != null ? includedZipcodes.map(cityFor) : (rest.includedCities ?? []);
+  return { ...rest, includedCities };
+};
+
+/**
  * Minimal stateful Stream Estate API fake. Records every call; supports
  * GET/POST /searches, GET/PUT /searches/{id}, GET /documents/properties and
  * the receiver health URL.
@@ -43,7 +69,7 @@ const makeApi = ({ searches = [], healthStatus = 200, documentsPages = [] } = {}
       return json({ ok: healthStatus === 200 }, healthStatus);
     }
     if (pathname === '/searches' && method === 'GET') {
-      return json({ 'hydra:member': [...state.searches.values()] });
+      return json({ 'hydra:member': [...state.searches.values()].map(serializeSearch) });
     }
     if (pathname === '/searches' && method === 'POST') {
       const body = JSON.parse(options.body);
@@ -55,17 +81,17 @@ const makeApi = ({ searches = [], healthStatus = 200, documentsPages = [] } = {}
         createdAt: '2026-07-09T10:00:00+02:00',
       };
       state.searches.set(id, created);
-      return json(created, 201);
+      return json(serializeSearch(created), 201);
     }
     if (pathname.startsWith('/searches/') && method === 'GET') {
       const found = state.searches.get(pathname);
-      return found ? json(found) : json({}, 404);
+      return found ? json(serializeSearch(found)) : json({}, 404);
     }
     if (pathname.startsWith('/searches/') && method === 'PUT') {
       const existing = state.searches.get(pathname) ?? {};
       const updated = { ...existing, ...JSON.parse(options.body), '@id': pathname, token: existing.token ?? 'tok-x' };
       state.searches.set(pathname, updated);
-      return json(updated);
+      return json(serializeSearch(updated));
     }
     if (pathname === '/documents/properties' && method === 'GET') {
       const page = Number(searchParams.get('page') ?? '1');
@@ -165,6 +191,63 @@ describe('bootstrap — reconcile mode (v2 #6, v3 A5)', () => {
     const { fetchImpl } = makeApi();
     const env = { ...process.env, STREAM_ESTATE_API_KEY: '' };
     await expect(runBootstrap({ fetchImpl, env, deps })).rejects.toThrow(/STREAM_ESTATE_API_KEY/);
+  });
+});
+
+describe('diffSearch — LIVE API read contract (fixture = real GET echo, 2026-07-11)', () => {
+  // Real prod echo of our search (only the webhook secret path segment and the
+  // search token are replaced by same-shape placeholders). Quirks it encodes:
+  // no `roomMax`/`includedZipcodes` keys; zipcodes resolved to `includedCities`.
+  const realEcho = JSON.parse(
+    readFileSync(new URL('./fixtures/stream-estate-search-echo.json', import.meta.url), 'utf8'),
+  );
+  const fixtureEnv = {
+    ...process.env,
+    PUBLIC_BASE_URL: 'https://hunter.10u15.net',
+    STREAM_ESTATE_WEBHOOK_SECRET: 'c0ffee'.repeat(8),
+  };
+  const fixtureBody = () => buildSearchBody({ env: fixtureEnv });
+
+  it('converges on the real echo (the exact divergence that broke prod bootstrap)', () => {
+    expect(diffSearch(realEcho, fixtureBody())).toEqual([]);
+  });
+
+  it('still catches a genuinely wrong zipcode set behind includedCities', () => {
+    const missingOne = { ...realEcho, includedCities: realEcho.includedCities.slice(1) };
+    expect(diffSearch(missingOne, fixtureBody())).toEqual(['includedZipcodes']);
+    const swapped = {
+      ...realEcho,
+      includedCities: [...realEcho.includedCities.slice(1), { ...realEcho.includedCities[0], zipcode: '75016' }],
+    };
+    expect(diffSearch(swapped, fixtureBody())).toEqual(['includedZipcodes']);
+    const noCities = { ...realEcho };
+    delete noCities.includedCities;
+    expect(diffSearch(noCities, fixtureBody())).toEqual(['includedZipcodes']);
+  });
+
+  it('still catches wrong scalar values on the real echo shape', () => {
+    expect(diffSearch({ ...realEcho, budgetMax: 9999 }, fixtureBody())).toEqual(['budgetMax']);
+    expect(diffSearch({ ...realEcho, roomMin: 1 }, fixtureBody())).toEqual(['roomMin']);
+    expect(diffSearch({ ...realEcho, furnished: null }, fixtureBody())).toEqual(['furnished']);
+  });
+
+  it('roomMax is skipped ONLY when absent (write-only read contract); an echoed value stays strict', () => {
+    expect('roomMax' in realEcho).toBe(false); // the live echo really omits the key
+    expect(diffSearch({ ...realEcho, roomMax: 4 }, fixtureBody())).toEqual([]);
+    expect(diffSearch({ ...realEcho, roomMax: 5 }, fixtureBody())).toEqual(['roomMax']);
+  });
+
+  it('reconcile ADOPTS the orphaned owned search in place — no duplicate POST (live incident 2026-07-11)', async () => {
+    const { state, fetchImpl } = makeApi({ searches: [realEcho] });
+    const summary = await runBootstrap({ fetchImpl, deps, env: fixtureEnv });
+
+    expect(state.calls.filter((c) => c.method === 'POST')).toHaveLength(0);
+    const put = state.calls.find((c) => c.method === 'PUT');
+    expect(put.url).toContain(realEcho['@id']);
+    expect(put.body.notificationEnabled).toBe(false);
+    expect(summary.searchId).toBe(realEcho['@id']);
+    expect(getParisHunterMeta('searchId')).toBe(realEcho['@id']);
+    expect(getParisHunterMeta('searchToken')).toBe(realEcho.token);
   });
 });
 
