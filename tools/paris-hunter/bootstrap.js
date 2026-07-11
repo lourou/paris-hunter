@@ -67,13 +67,34 @@ const sameSet = (a, b) => {
 };
 
 /**
- * Compares our identity body against a remote search echo.
+ * Live API read contract (observed 2026-07-11, matches the docs' own response
+ * examples): these body params are accepted on POST/PUT but NEVER serialized
+ * on any read — the key is entirely absent from the echo, so there is nothing
+ * to compare against. They are skipped ONLY when absent; a server that does
+ * echo them (e.g. an old mock) still gets strict comparison.
+ */
+const WRITE_ONLY_FIELDS = new Set(['roomMax', 'bedroomMax']);
+
+/**
+ * Compares our identity body against a remote search echo, mapping the live
+ * API's read-contract quirks (see fixtures/stream-estate-search-echo.json):
+ *  - `includedZipcodes` is write-only; reads resolve it to `includedCities`
+ *    (City objects carrying a string `zipcode`). Compared as string sets.
+ *  - `roomMax`/`bedroomMax` are write-only (WRITE_ONLY_FIELDS above).
+ * Still strict: a wrong value, wrong zipcode set, or missing field fails.
+ *
  * @returns {string[]} mismatched field names (empty = converged)
  */
 export const diffSearch = (remote, body = buildSearchBody()) => {
   const mismatches = [];
   for (const [key, value] of Object.entries(body)) {
-    const remoteValue = remote?.[key];
+    const echoed = remote != null && key in remote;
+    let remoteValue = remote?.[key];
+    if (key === 'includedZipcodes' && !echoed && Array.isArray(remote?.includedCities)) {
+      remoteValue = remote.includedCities.map((city) => city?.zipcode);
+    } else if (WRITE_ONLY_FIELDS.has(key) && !echoed && remote != null) {
+      continue;
+    }
     const equal = Array.isArray(value) ? sameSet(value, remoteValue) : remoteValue === value;
     if (!equal) {
       mismatches.push(key);
