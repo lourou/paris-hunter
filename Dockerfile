@@ -1,4 +1,11 @@
-FROM node:24-slim
+# paris-hunter: the Debian suite is pinned explicitly (trixie = Debian 13,
+# glibc 2.41). The @xmtp/node-bindings linux-*-gnu native binaries (node-sdk
+# 6.0.0 -> node-bindings 1.10.0, plus the copies nested under convos-cli and
+# content-type-primitives) require GLIBC_2.38+; the unpinned node:24-slim can
+# resolve to bookworm (Debian 12, glibc 2.36), where dlopen fails and the napi
+# loader masks it as "Cannot find native binding. npm has a bug related to
+# optional dependencies..." -> convos adapter degraded(init-error) at runtime.
+FROM node:24-trixie-slim
 
 # paris-hunter: this image is API-only (FREDY_SKIP_CHROMIUM=true — our single
 # provider implements getListings, so Fredy never launches a browser).
@@ -24,6 +31,15 @@ COPY package.json yarn.lock ./
 RUN yarn config set network-timeout 600000 \
   && yarn --frozen-lockfile \
   && yarn cache clean
+
+# BUILD-TIME ASSERTION: the @xmtp native binding MUST load for this image's
+# platform or the build fails — a broken image must never ship. Importing
+# @xmtp/node-sdk exercises the top-level node-bindings copy and the one nested
+# under content-type-primitives; @xmtp/convos-cli exercises its own nested
+# copy. This catches BOTH failure modes behind the napi loader's misleading
+# "Cannot find native binding" error: per-platform artifacts dropped by the
+# installer (npm/cli#4828 class) and a base image whose glibc is too old.
+RUN node --input-type=module -e "await import('@xmtp/node-sdk'); await import('@xmtp/convos-cli'); console.log('xmtp native bindings OK');"
 
 # Purge build tools now that native modules are compiled
 RUN apt-get purge -y python3 make g++ \

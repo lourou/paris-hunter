@@ -84,6 +84,23 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 
 Review the dry-run output, then expect in the logs: migrations, `paris-hunter: initialized`,
 the Chromium skip, and the convos adapter waiting for an invite (reachability detail: §8).
+
+**Boot-log smoke — MANDATORY, do not proceed on failure.** The logs MUST contain
+`paris-hunter: initialized` AND MUST NOT contain `degraded(init-error)`:
+
+```bash
+docker compose -f deploy/compose.yml logs fredy | grep -c "paris-hunter: initialized"   # MUST be >= 1
+docker compose -f deploy/compose.yml logs fredy | grep "degraded(init-error)"           # MUST print NOTHING
+```
+
+`degraded(init-error)` with "Cannot find native binding" means the @xmtp native
+binding does not load inside the image (wrong platform artifact or a base image
+with too-old glibc — the Dockerfile build now asserts this and pins
+`node:24-trixie-slim`). The boot otherwise LOOKS clean ("Started Fredy
+successfully" still appears), so a plain "did it come up" check misses it.
+The adapter's expected first-run state without an invite is `degraded(no-invite)`
+— that one is normal and allowed.
+
 If you later change any port mapping (e.g. `PUBLIC_BIND_IP`), apply it with `down` then
 `up -d` — stop-then-start, per the single-writer discipline (§6) anyway.
 
