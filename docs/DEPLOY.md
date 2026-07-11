@@ -193,7 +193,9 @@ docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/boot
 docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/bootstrap.js
 
 # 4. Seed — marks the current market as seen and persists the notify watermark
-docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/seed.js
+#    (--confirm-live is the deliberate consent gate for the billable live poll — seed.js
+#    refuses to poll without it)
+docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/seed.js --confirm-live
 
 # 5. Start the receiver stack BEFORE enablement
 docker compose -f deploy/compose.yml up -d
@@ -345,7 +347,7 @@ Prerequisites:
 On the VPS:
 
 ```bash
-tailscale serve --bg http://127.0.0.1:9998
+sudo tailscale serve --bg http://127.0.0.1:9998
 ```
 
 The UI is then at `https://playground.fold-rooster.ts.net` (general form:
