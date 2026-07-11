@@ -219,6 +219,14 @@ docker compose -f deploy/compose.yml exec fredy node tools/paris-hunter/bootstra
 docker compose -f deploy/compose.yml logs -f fredy
 ```
 
+What you should see in the admin UI after step 3 (bootstrap): a job named `paris-hunter`
+(enabled) owned by the admin user, with provider Stream Estate and notification adapter
+`Convos (XMTP)` listed in the job editor. The Convos adapter deliberately has NO per-job
+fields — all its configuration comes from env (`CONVOS_*`); it also appears in the adapter
+dropdown when creating any job manually. The job row is what wires webhook deliveries to the
+provider (`jobs:runOne` is a no-op without it) — if it is missing, re-run step 3; bootstrap
+is idempotent and upserts the job under the fixed id `paris-hunter`.
+
 Watermark margin caveat (accepted risk F.12): seeding sets the watermark 2 minutes in the future
 (clock-skew margin). A listing published inside that enable window is suppressed, not notified —
 over-suppression is chosen over a notification storm.
