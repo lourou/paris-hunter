@@ -55,11 +55,14 @@ else dropped (stateful, so Tailscale still connects without an explicit inbound 
 
 ```bash
 git clone git@github.com:<you>/paris-hunter.git && cd paris-hunter
+cp deploy/.env.example deploy/.env    # then edit: PUBLIC_BIND_IP=<VPS public IPv4>
 # then, from the operator machine — .env is gitignored, it travels separately:
 scp .env deploy@<vps>:~/paris-hunter/.env
 ```
 
-The repo is a private GitHub mirror; fill `.env` per §2.
+The repo is a private GitHub mirror; fill `.env` per §2. `deploy/.env` is a SEPARATE file
+feeding compose `${}` interpolation (§2): Caddy binds 80/443 on `PUBLIC_BIND_IP` only, so the
+Tailscale IP's :443 stays free for `tailscale serve` (§12).
 
 ### 0.5 Build
 
@@ -81,6 +84,8 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST \
 
 Review the dry-run output, then expect in the logs: migrations, `paris-hunter: initialized`,
 the Chromium skip, and the convos adapter waiting for an invite (reachability detail: §8).
+If you later change any port mapping (e.g. `PUBLIC_BIND_IP`), apply it with `down` then
+`up -d` — stop-then-start, per the single-writer discipline (§6) anyway.
 
 ### 0.7 Admin UI over Tailscale
 
@@ -118,10 +123,14 @@ Copy `.env.example` → `.env` on the VPS and fill it in. Hard requirements enfo
   base used to register webhook URLs with Stream Estate.
 - `SCW_ACCESS_KEY` / `SCW_SECRET_KEY` — required when `ATTACHMENT_STORE=s3` (the default).
 
-### Env-file handling (two distinct mechanisms — don't mix them up)
+### Env-file handling (three distinct mechanisms — don't mix them up)
 
 - **Inside the container**: compose injects `../.env` via `env_file` (see `deploy/compose.yml`).
   Nothing to do; `docker compose run --rm fredy node tools/paris-hunter/<tool>.js` inherits it.
+- **Compose `${}` interpolation** (`PUBLIC_BIND_IP` in the caddy ports): read from
+  `deploy/.env` — the compose PROJECT DIRECTORY for `docker compose -f deploy/compose.yml` —
+  NOT the repo-root `.env`. `cp deploy/.env.example deploy/.env` and fill in (§0.4); compose
+  fails fast with a clear message if it is missing.
 - **On a host shell** (operator machine or VPS, outside docker): Node does NOT read `.env` by
   itself. ALWAYS invoke tools as:
 
@@ -358,7 +367,19 @@ admin console).
 application-level auth layer — change the default `admin`/`admin` password immediately after
 first boot.
 
-To undo: `tailscale serve reset`.
+To undo: `tailscale serve reset`. The serve config persists across reboots (tailscaled
+restores it from state) — no cron/systemd re-apply needed. Sanity check any time with
+`tailscale serve status`: it must list the proxy to `http://127.0.0.1:9998`.
+
+### Port 443 collision (tlsv1 internal error on the ts.net URL)
+
+Caddy must NOT bind the Tailscale IP. A bare `443:443` compose mapping binds `0.0.0.0` —
+which also covers `100.117.62.55` — so `tailscale serve` cannot bind :443 on the tailnet
+address, and tailnet HTTPS requests land on Caddy with a `*.ts.net` SNI it has no
+certificate for: `curl https://playground.fold-rooster.ts.net` then fails with
+`ssl/tls alert internal error` (tlsv1). That is why `deploy/compose.yml` publishes Caddy
+on `${PUBLIC_BIND_IP}` only (set in `deploy/.env`, §0.4). If you see the symptom, check
+`deploy/.env`, then apply with `down` + `up -d` (§6) and re-run `tailscale serve status`.
 
 ### Firewall
 

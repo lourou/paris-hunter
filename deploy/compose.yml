@@ -6,6 +6,9 @@
 #     stop-then-start, never rolling: `docker compose down && ... up -d`.
 #   - The container reads its env from ../.env via env_file. Host-side tool
 #     invocations instead use `node --env-file-if-exists=.env tools/...`.
+#   - ${} interpolation (PUBLIC_BIND_IP below) reads deploy/.env — the compose
+#     PROJECT DIRECTORY for `docker compose -f deploy/compose.yml` — NOT the
+#     repo-root .env above. See deploy/.env.example.
 #   - Photo ciphertext blobs live on Scaleway Object Storage — there is no
 #     attachments volume and Caddy serves no attachments route.
 
@@ -36,9 +39,13 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    # Bind ONLY the VPS public IPv4 — a bare '443:443' binds 0.0.0.0, which
+    # also covers the Tailscale IP and blocks `tailscale serve` from binding
+    # :443 on the tailnet address (admin UI, docs/DEPLOY.md §12). Fail fast if
+    # unset: a silent 0.0.0.0 default would re-break tailscale serve.
     ports:
-      - '80:80'
-      - '443:443'
+      - '${PUBLIC_BIND_IP:?set in deploy/.env — VPS public IPv4}:80:80'
+      - '${PUBLIC_BIND_IP:?set in deploy/.env — VPS public IPv4}:443:443'
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
