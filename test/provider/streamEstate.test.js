@@ -305,6 +305,33 @@ describe('fail-closed hard filters (v2 #9)', () => {
   });
 });
 
+describe('premium flag BAIL_6_ANS through the provider decision path', () => {
+  it('"bail institutionnel" in the description → BAIL_6_ANS flag + 🏛️ marker in the outbox text', async () => {
+    seedGate();
+    const payload = fixture('match.json');
+    payload.propertyDocument.description += ' Bail institutionnel.';
+    insertFixture('match.json', { payload });
+
+    const raws = await provider.config.getListings();
+
+    expect(decisions()[0].decision).toBe('outboxed');
+    expect(outboxRows()[0].text).toContain('🏛️ bail 6 ans');
+    const listing = provider.config.normalize(raws[0]);
+    expect(listing.ph.score.flags).toContain('BAIL_6_ANS');
+  });
+
+  it('plain match without premium wording carries no BAIL_6_ANS flag or marker', async () => {
+    seedGate();
+    insertFixture('match.json');
+
+    const raws = await provider.config.getListings();
+
+    expect(outboxRows()[0].text).not.toContain('bail 6 ans');
+    const listing = provider.config.normalize(raws[0]);
+    expect(listing.ph.score.flags).not.toContain('BAIL_6_ANS');
+  });
+});
+
 describe('per-row exceptions + dead-letter (v3 A8)', () => {
   it('unparseable JSON payload → dead-letter immediately', async () => {
     seedGate();
