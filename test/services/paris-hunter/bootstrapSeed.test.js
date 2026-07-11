@@ -114,6 +114,11 @@ describe('bootstrap — reconcile mode (v2 #6, v3 A5)', () => {
       url: 'inbox://stream-estate',
       enabled: true,
     });
+    // `name` must be persisted: the admin UI job editor renders the stored
+    // adapter name, not a registry lookup — without it the row is blank.
+    expect(upsertJobSpy.mock.calls[0][0].notificationAdapter).toEqual([
+      { id: 'convos', name: 'Convos (XMTP)', fields: {} },
+    ]);
   });
 
   it('forces notificationEnabled:false on ALL owned searches — canonical AND duplicates (v3 A5)', async () => {

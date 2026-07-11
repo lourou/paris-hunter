@@ -295,7 +295,9 @@ export const runBootstrap = async ({ argv = [], fetchImpl = fetch, env = process
     name: 'paris-hunter',
     enabled: true,
     provider: [{ id: 'streamEstate', url: 'inbox://stream-estate', enabled: true }],
-    notificationAdapter: [{ id: 'convos', fields: {} }],
+    // `name` matters: the admin UI job editor renders the adapter's stored
+    // `name` (not a registry lookup), so without it the Convos row is blank.
+    notificationAdapter: [{ id: 'convos', name: 'Convos (XMTP)', fields: {} }],
     userId: adminUserId,
   });
   summary.actions.push({ action: 'job-upserted', jobId: PH.jobId });

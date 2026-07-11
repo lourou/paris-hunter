@@ -333,7 +333,7 @@ if (isMain) {
         jobId: 'paris-hunter',
         name: 'paris-hunter',
         provider: [{ id: 'streamEstate', url: 'inbox://stream-estate', enabled: true }],
-        notificationAdapter: [{ id: 'convos', fields: {} }],
+        notificationAdapter: [{ id: 'convos', name: 'Convos (XMTP)', fields: {} }],
         userId: admin.userId ?? admin.id,
         enabled: true,
       });

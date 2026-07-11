@@ -6,9 +6,11 @@
 import { Empty, Table, Button } from '@douyinfe/semi-ui-19';
 import { IconDelete, IconEdit } from '@douyinfe/semi-icons';
 import { useTranslation } from '../../services/i18n/i18n.jsx';
+import { useSelector } from '../../services/state/store';
 
 export default function NotificationAdapterTable({ notificationAdapter = [], onRemove, onEdit } = {}) {
   const t = useTranslation();
+  const knownAdapter = useSelector((state) => state.notificationAdapter) || [];
   return (
     <Table
       pagination={false}
@@ -17,6 +19,10 @@ export default function NotificationAdapterTable({ notificationAdapter = [], onR
         {
           title: t('notification.tableColumnName'),
           dataIndex: 'name',
+          // Job rows created outside the UI (e.g. tools/paris-hunter/bootstrap.js)
+          // persist only { id, fields } — fall back to the adapter registry so
+          // the row never renders with a blank name.
+          render: (name, record) => name ?? knownAdapter.find((a) => a?.id === record.id)?.name ?? record.id,
         },
 
         {
