@@ -38,19 +38,20 @@ line plus guards, so upstream rebases stay cheap (see Fork maintenance below).
 Defaults live in `lib/services/paris-hunter/phConfig.js`; all overridable via
 `PH_*` env vars (see `.env.example`).
 
-- **Location:** Paris 11e + 12e (75011, 75012). Secondary zones to enable later:
-  10e, 20e, 3e, 4e.
+- **Location:** Paris 9e, 10e, 11e, 12e, 13e, 17e + 20e (75009, 75010, 75011,
+  75012, 75013, 75017, 75020). Secondary zones to enable later: 3e, 4e.
 - **Type:** apartment, **unfurnished** (location nue, bail loi 1989), long-term.
-- **Rooms:** 3–4 pièces. **Price:** €2,500–3,100/month **hors charges**.
+- **Rooms:** 3–4 pièces. **Price:** €2,000–3,100/month **hors charges**.
   Surface: no hard filter (used for scoring only).
 - **Hard exclusions (regex post-filter):** meublé, colocation/coloc, bail
   mobilité, courte durée, sous-location, saisonnière.
 - **Scoring (flag, don't decide):** `pricePerM2 = priceHc / surface`;
   `capRatio = pricePerM2 / cap` where the cap approximates the *loyer de
   référence majoré* per arrondissement (€/m², `capTable.js`):
-  `{11e: 34, 12e: 32, 10e: 33, 20e: 30, 3e: 38, 4e: 39, 9e: 34}`.
+  `{11e: 34, 12e: 32, 10e: 33, 20e: 30, 3e: 38, 4e: 39, 9e: 34, 13e: 31, 17e: 33}`.
   Flags: `OVER_CAP` if capRatio > 1.05 · `GOOD_DEAL` if < 0.85 ·
-  `NO_SURFACE` if surface missing.
+  `NO_SURFACE` if surface missing · `BAIL_6_ANS` (premium, 🏛️) if the text
+  advertises an institutional 6-year lease.
 
 Price-decrease events on a known listing re-notify once, with a distinct
 "⬇️ baisse de prix" format.

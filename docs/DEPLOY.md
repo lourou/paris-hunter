@@ -102,6 +102,8 @@ Go NO further until Stream Estate support chat confirms the billing definition o
 (go-live E.1); then run §5 steps 3 (`bootstrap.js`), 4 (`seed.js --confirm-live`) and
 6 (`--enable-notifications`), plus the group-invite flow (§5, §9).
 
+To change the `PH_*` search parameters after go-live, follow §7bis.
+
 ## 1. Prerequisites
 
 - VPS with `docker` + `docker compose` v2 (Hetzner box, on the tailnet as `<HOST>`,
@@ -267,6 +269,41 @@ counter (`usage:<YYYY-MM>` in `paris_hunter_meta`, incremented per accepted webh
 - The counter is a proxy for billed items until billing semantics are confirmed (E.1). On day 1,
   compare the meta counter with the Stream Estate dashboard and adjust the ceiling (E.9).
   Investigate if usage trends past ~700 items/month (realistic estimate is 90–620).
+
+## 7bis. Changing search parameters later
+
+The env-driven search parameters (`PH_ZIPS`, `PH_BUDGET_HC_MIN`/`MAX`, `PH_SERVER_BUDGET_MIN`/`MAX`,
+`PH_ROOMS_MIN`/`MAX`) are part of the saved-search identity (configRev, see
+`lib/services/paris-hunter/searchConfig.js`). To change them after go-live:
+
+```bash
+# 1. Edit the PH_* lines in .env on the VPS
+vi ~/paris-hunter/.env
+
+# 2. Stop-then-start so the new env is live (single-writer discipline, §6)
+docker compose -f deploy/compose.yml down
+docker compose -f deploy/compose.yml up -d
+
+# 3. Reconcile the saved search server-side. The PUT lands with notifications
+#    DISABLED: the new configRev no longer matches the persisted watermark
+#    (config-revision binding), so nothing can notify yet.
+docker compose -f deploy/compose.yml exec fredy node tools/paris-hunter/bootstrap.js
+
+# 4. Re-enable — health-probes the running receiver, mints a fresh watermark
+#    (cutoff = now) bound to the NEW configRev, then flips the search on.
+docker compose -f deploy/compose.yml exec fredy node tools/paris-hunter/bootstrap.js --enable-notifications
+```
+
+Notes:
+
+- Config changes invalidate the enablement watermark **by design**: a watermark minted for
+  another configRev never authorizes, so a widened band or new zip can never replay the
+  pre-existing market into the group (no notification storm). Deliveries between steps 3 and 4
+  are suppressed (`suppressed:unseeded`), not queued — keep that window short.
+- No re-seed is needed: `seededAt` persists, and the fresh watermark's cutoff is the enable
+  time, so only listings published after step 4 notify.
+- Code-level knobs — hard exclusions (`exclusions.js`), scoring thresholds (`scoring.js`), the
+  cap table (`capTable.js`) — are code+test changes shipped as a normal upgrade (§6), NOT env.
 
 ## 8. Webhook reachability check (go-live E.4)
 

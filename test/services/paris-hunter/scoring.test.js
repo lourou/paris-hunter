@@ -5,6 +5,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getCapForZip } from '../../../lib/services/paris-hunter/capTable.js';
+import { buildPhConfig } from '../../../lib/services/paris-hunter/phConfig.js';
 import { scoreListing } from '../../../lib/services/paris-hunter/scoring.js';
 
 describe('paris-hunter cap table', () => {
@@ -16,8 +17,16 @@ describe('paris-hunter cap table', () => {
     ['75003', 38],
     ['75004', 39],
     ['75009', 34],
+    ['75013', 31],
+    ['75017', 33],
   ])('returns the unfurnished cap for %s', (zipcode, cap) => {
     expect(getCapForZip(zipcode)).toBe(cap);
+  });
+
+  it('covers every default search zipcode with a cap entry', () => {
+    for (const zip of buildPhConfig({}).zips) {
+      expect(getCapForZip(zip), `missing cap for default zip ${zip}`).not.toBeNull();
+    }
   });
 
   it('accepts numeric zipcodes and returns null for unknown or missing ones', () => {
@@ -83,5 +92,54 @@ describe('paris-hunter scoring', () => {
       capRatio: null,
       flags: [],
     });
+  });
+});
+
+describe('paris-hunter premium flag BAIL_6_ANS', () => {
+  const score = (text) => scoreListing({ priceHc: 3000, surface: 100, zipcode: '75011', text });
+
+  it.each([
+    'Bail 6 ans, location nue',
+    'bail de 6 ans',
+    'BAIL DE 6 ANS',
+    'Bail de six ans renouvelable',
+    'bail de SIX ANS',
+    'Bail 6 années fermes',
+    'bail 6 annees',
+    'Bail institutionnel longue durée',
+    'bail institutionnel',
+    'Proposé avec un bail-institutionnel',
+  ])('detects the institutional 6-year lease in %j', (text) => {
+    expect(score(text).flags).toEqual(['BAIL_6_ANS']);
+  });
+
+  it.each([
+    'bail classique',
+    'Bail civil',
+    'bail code civil',
+    'Bail loi 1989',
+    'bail de 3 ans',
+    'bail',
+    'un bel appartement',
+  ])('does not trigger for %j', (text) => {
+    expect(score(text).flags).toEqual([]);
+  });
+
+  it('does not trigger without text', () => {
+    expect(scoreListing({ priceHc: 3000, surface: 100, zipcode: '75011' }).flags).toEqual([]);
+  });
+
+  it('renders alongside cap and surface flags', () => {
+    expect(scoreListing({ priceHc: 2850, surface: 72, zipcode: '75011', text: 'bail 6 ans' }).flags).toEqual([
+      'OVER_CAP',
+      'BAIL_6_ANS',
+    ]);
+    expect(scoreListing({ priceHc: 2850, surface: null, zipcode: '75011', text: 'Bail de six ans' }).flags).toEqual([
+      'NO_SURFACE',
+      'BAIL_6_ANS',
+    ]);
+    expect(scoreListing({ priceHc: null, surface: 72, zipcode: '75011', text: 'bail 6 années' }).flags).toEqual([
+      'BAIL_6_ANS',
+    ]);
   });
 });

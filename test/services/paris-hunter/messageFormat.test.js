@@ -42,6 +42,19 @@ describe('paris-hunter message formatting', () => {
     expect(message.split('\n')[0]).toContain('27,5 €/m² ✅ bonne affaire');
   });
 
+  it('renders the premium bail 6 ans marker on the first line', () => {
+    const message = buildMessage(
+      baseListing({ score: { pricePerM2: 27.5, capRatio: 0.8, flags: ['GOOD_DEAL', 'BAIL_6_ANS'] } }),
+    );
+    expect(message.split('\n')[0]).toMatch(/^🏠 3P .* 27,5 €\/m² ✅ bonne affaire 🏛️ bail 6 ans$/);
+  });
+
+  it('renders the premium marker even without a cap flag', () => {
+    const message = buildMessage(baseListing({ score: { pricePerM2: 39.6, capRatio: 1.02, flags: ['BAIL_6_ANS'] } }));
+    expect(message.split('\n')[0]).toContain('🏛️ bail 6 ans');
+    expect(message.split('\n')[0]).not.toContain('⚠️');
+  });
+
   it('omits price per m2 and marks a missing surface', () => {
     const message = buildMessage(
       baseListing({ surface: null, score: { pricePerM2: 999, capRatio: null, flags: ['NO_SURFACE'] } }),
