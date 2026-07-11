@@ -9,10 +9,11 @@ import { buildPhConfig, assertValidSecret, assertHttpsBaseUrl } from '../../../l
 describe('paris-hunter phConfig', () => {
   it('applies defaults on an empty env', () => {
     const ph = buildPhConfig({});
-    expect(ph.zips).toEqual(['75011', '75012']);
-    expect(ph.budgetHcMin).toBe(2500);
+    expect(ph.zips).toEqual(['75009', '75010', '75011', '75012', '75013', '75017', '75020']);
+    expect(ph.budgetHcMin).toBe(2000);
     expect(ph.budgetHcMax).toBe(3100);
-    expect(ph.serverBudgetMin).toBe(2400);
+    // Server band deliberately wider than the notify band (see phConfig.js).
+    expect(ph.serverBudgetMin).toBe(1900);
     expect(ph.serverBudgetMax).toBe(3350);
     expect(ph.roomsMin).toBe(3);
     expect(ph.roomsMax).toBe(4);

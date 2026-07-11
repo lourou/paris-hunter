@@ -58,6 +58,15 @@ describe('paris-hunter hard exclusions', () => {
     },
   );
 
+  // Regression pin: institutional/civil lease wordings must never trip the
+  // "bail mobilité" arm (or any other exclusion).
+  it.each(['bail civil', 'Bail civil', 'bail code civil', 'Bail code civil, location nue'])(
+    'never excludes the civil-lease wording %j',
+    (text) => {
+      expect(findExclusion(text)).toBeNull();
+    },
+  );
+
   it('handles missing text without throwing', () => {
     expect(findExclusion(null)).toBeNull();
     expect(findExclusion(undefined)).toBeNull();
