@@ -12,6 +12,91 @@ Stream Estate ──POST /api/webhook/stream-estate/<secret>/{match,event}──
                                              └──▶ Scaleway bucket paris-hunter (ciphertext photos)
 ```
 
+## 0. Quickstart — fresh VPS to running stack
+
+Verified sequence from the first real deploy (Hetzner Ubuntu 24.04, user `deploy`, host
+`playground` on tailnet `fold-rooster`, domain `hunter.10u15.net`). Copy-paste top to bottom;
+each step defers detail to its section.
+
+### 0.1 DNS
+
+```bash
+dig +short hunter.10u15.net   # must print the VPS public IPv4
+```
+
+A record `hunter.10u15.net` → VPS public IPv4 — DNS-only/grey-cloud if Cloudflare, because the
+§8 source-IP allowlist depends on seeing Stream Estate's real address.
+
+### 0.2 Docker
+
+```bash
+curl -fsSL https://get.docker.com | sh
+sudo usermod -aG docker $USER && newgrp docker
+```
+
+Use the official script, NOT snap docker; docker-group membership is root-equivalent on the
+host — accepted tradeoff on a single-user VPS.
+
+### 0.3 Firewall (ufw)
+
+```bash
+sudo ufw allow OpenSSH        # BEFORE enable, or you lock yourself out
+sudo ufw enable
+sudo ufw allow 80/tcp
+sudo ufw allow 443/tcp
+```
+
+Keep Tailscale's own rules (41641/udp, and 22 on `tailscale0`); once SSH-over-Tailscale is
+confirmed working from a SECOND session, optionally delete the public OpenSSH allows (§12).
+On Hetzner Cloud Firewall the equivalent is inbound 22, 80/tcp and 443/tcp with everything
+else dropped (stateful, so Tailscale still connects without an explicit inbound rule).
+
+### 0.4 Code + secrets
+
+```bash
+git clone git@github.com:<you>/paris-hunter.git && cd paris-hunter
+# then, from the operator machine — .env is gitignored, it travels separately:
+scp .env deploy@<vps>:~/paris-hunter/.env
+```
+
+The repo is a private GitHub mirror; fill `.env` per §2.
+
+### 0.5 Build
+
+```bash
+docker compose -f deploy/compose.yml build
+```
+
+### 0.6 Non-billable startup
+
+```bash
+docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/bootstrap.js --dry-run
+docker compose -f deploy/compose.yml up -d
+docker compose -f deploy/compose.yml logs -f fredy
+# from the laptop:
+curl -s -o /dev/null -w '%{http_code}\n' https://hunter.10u15.net/            # expect 404
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  "https://hunter.10u15.net/api/webhook/stream-estate/dummy-secret/match"     # expect 403
+```
+
+Review the dry-run output, then expect in the logs: migrations, `paris-hunter: initialized`,
+the Chromium skip, and the convos adapter waiting for an invite (reachability detail: §8).
+
+### 0.7 Admin UI over Tailscale
+
+```bash
+sudo tailscale serve --bg http://127.0.0.1:9998
+```
+
+Toggle MagicDNS + HTTPS certificates in the Tailscale admin console (DNS page) first; the UI is
+then at `https://playground.fold-rooster.ts.net` — change `admin`/`admin` immediately (§12).
+
+### 0.8 ⚠️ STOP — billing gate
+
+Go NO further until Stream Estate support chat confirms the billing definition of an "item"
+(go-live E.1); then run §5 steps 3 (`bootstrap.js`), 4 (`seed.js --confirm-live`) and
+6 (`--enable-notifications`), plus the group-invite flow (§5, §9).
+
 ## 1. Prerequisites
 
 - VPS with `docker` + `docker compose` v2 (Hetzner box, on the tailnet as `playground`,
