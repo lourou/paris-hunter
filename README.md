@@ -98,6 +98,9 @@ without that log line is a bug.
   clone**: `git config merge.ours.driver true`.
 - The upstream README is preserved verbatim at `README-fredy-upstream.md`
   (Fredy's own docs: providers, adapters, UI, general usage).
+- `ui/src/components/map/Map.jsx` intentionally diverges from upstream (Paris
+  default center/zoom, `FRANCE_BOUNDS` instead of `GERMANY_BOUNDS`); rebases may
+  conflict there — resolve by keeping the France bounds.
 
 ## v2 backlog (out of scope, see brief §6)
 
