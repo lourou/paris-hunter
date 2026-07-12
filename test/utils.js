@@ -18,6 +18,11 @@ vi.mock('../lib/services/storage/listingsStorage.js', () => mockStore);
 vi.mock('../lib/services/storage/settingsStorage.js', () => mockStore);
 vi.mock('../lib/services/geocoding/geoCodingService.js', () => ({
   geocodeAddress: mockStore.getGeocoordinatesByAddress,
+  // Native-coords passthrough, address fallback — no network, mirrors the ladder.
+  geocodeListing: (listing) =>
+    listing.latitude != null && listing.longitude != null
+      ? { lat: listing.latitude, lng: listing.longitude, type: 'native' }
+      : mockStore.getGeocoordinatesByAddress(listing.address),
 }));
 vi.mock('../lib/services/storage/jobStorage.js', () => ({
   getJob: (jobKey) => ({ id: jobKey, userId: 'user1' }),
