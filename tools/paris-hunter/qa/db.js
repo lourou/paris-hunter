@@ -22,7 +22,8 @@
  *       set-meta <key> <value>          -> upserts paris_hunter_meta
  *       inbox-row <externalId>          -> JSON of newest inbox row for that external id
  *       outbox-row <dedupKey>           -> JSON of the outbox row
- *       counts <dedupKey>               -> JSON {inboxDone, inboxPending, seen, outbox}
+ *       counts [dedupKey]               -> JSON {inboxDone, inboxPending, seen, outbox} for that key;
+ *                                          without a key: whole-DB totals (scope:"global")
  *       assert-final <dedupKey> --mode offline|live [--deadline <s>]
  *                                       -> polls until the exactly-once terminal state holds (see below)
  *       qa-seed-watermark [--cutoff-ms <n>]
@@ -164,10 +165,28 @@ export const findOutboxRow = (dedupKey) => {
 };
 
 /**
+ * Whole-DB state snapshot (no dedup-key filter). Incident 2026-07-12: `counts`
+ * without a dedup key silently bound `undefined` and returned all zeros against
+ * a ledger holding 6001 rows — misdiagnosed as "seen ledger lost". A key-less
+ * `counts` now reports these global totals instead.
+ */
+export const globalCounts = () => ({
+  scope: 'global',
+  inboxDone: SqliteConnection.query('SELECT COUNT(*) AS n FROM stream_estate_inbox WHERE done_at IS NOT NULL')[0].n,
+  inboxPending: SqliteConnection.query('SELECT COUNT(*) AS n FROM stream_estate_inbox WHERE done_at IS NULL')[0].n,
+  seen: SqliteConnection.query('SELECT COUNT(*) AS n FROM ph_seen')[0].n,
+  outbox: SqliteConnection.query('SELECT COUNT(*) AS n FROM convos_outbox')[0].n,
+  outboxSent: SqliteConnection.query('SELECT COUNT(*) AS n FROM convos_outbox WHERE sent_at IS NOT NULL')[0].n,
+});
+
+/**
  * Exactly-once state snapshot for one dedup key.
  * inboxDone/inboxPending count rows whose derived dedup key matches (kind-aware).
  */
 export const countsFor = (dedupKey) => {
+  if (dedupKey == null || dedupKey === '') {
+    throw new Error('countsFor requires a dedup key — use globalCounts() for whole-DB totals');
+  }
   const inboxRows = SqliteConnection.query('SELECT id, kind, external_id, payload, done_at FROM stream_estate_inbox');
   let inboxDone = 0;
   let inboxPending = 0;
@@ -269,7 +288,9 @@ if (isMain) {
     }
     case 'counts': {
       requireTables();
-      console.log(JSON.stringify(countsFor(args[0])));
+      // No dedup key → global totals (a key-less per-key query used to return
+      // all-zeros no matter what the DB held — see globalCounts).
+      console.log(JSON.stringify(args[0] ? countsFor(args[0]) : globalCounts()));
       break;
     }
     case 'qa-seed-watermark': {

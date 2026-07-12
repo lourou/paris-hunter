@@ -8,6 +8,21 @@
 # "Admin UI over Tailscale").
 
 fredy.example.com {
+	# --- Access log (incident 2026-07-12) ------------------------------------
+	# Log EVERY request on this vhost (webhook hits, 403 denies, 404s) to stdout
+	# (`docker logs paris-hunter-caddy-1`): without it, a delivery answered 200
+	# left no trace anywhere between Stream Estate and the app. The webhook
+	# secret travels as a path segment — redact it before it reaches the log.
+	log {
+		output stdout
+		format filter {
+			wrap json
+			fields {
+				request>uri regexp /api/webhook/stream-estate/[^/]+ /api/webhook/stream-estate/<redacted>
+			}
+		}
+	}
+
 	# --- Stream Estate webhook ---------------------------------------------
 	# Two factors: IP allowlist here (Stream Estate egress IP) + the secret
 	# path segment checked in-app (timingSafeEqual). While testing against the
