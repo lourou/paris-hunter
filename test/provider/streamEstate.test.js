@@ -435,3 +435,102 @@ describe('normalize + filter through the REAL Fredy pipeline (v2 #7/#8)', () => 
     expect(listing.id).toBe(null);
   });
 });
+
+describe('native coordinates passthrough (zero geocoding)', () => {
+  it('normalize carries propertyDocument.locations {lat, lon} as latitude/longitude', async () => {
+    seedGate();
+    insertFixture('match.json');
+    const raws = await provider.config.getListings();
+    const listing = provider.config.normalize(raws[0]);
+
+    expect(listing.latitude).toBe(48.8578);
+    expect(listing.longitude).toBe(2.3841);
+  });
+
+  it('falls back to the city centroid (city.location) when locations is missing', async () => {
+    seedGate();
+    const payload = fixture('match.json');
+    delete payload.propertyDocument.locations;
+    payload.propertyDocument.city.location = { lat: 48.858, lon: 2.3802 };
+    insertFixture('match.json', { payload });
+
+    const raws = await provider.config.getListings();
+    const listing = provider.config.normalize(raws[0]);
+
+    expect(listing.latitude).toBe(48.858);
+    expect(listing.longitude).toBe(2.3802);
+  });
+
+  it('payload without any coordinates → null lat/lng (geocoding cron backfills)', async () => {
+    seedGate();
+    const payload = fixture('match.json');
+    delete payload.propertyDocument.locations;
+    insertFixture('match.json', { payload });
+
+    const raws = await provider.config.getListings();
+    const listing = provider.config.normalize(raws[0]);
+
+    expect(listing.latitude).toBe(null);
+    expect(listing.longitude).toBe(null);
+  });
+
+  it('partial coordinates (lat without lon) → null pair, never a half-coordinate', async () => {
+    seedGate();
+    const payload = fixture('match.json');
+    payload.propertyDocument.locations = { lat: 48.8578 };
+    insertFixture('match.json', { payload });
+
+    const raws = await provider.config.getListings();
+    const listing = provider.config.normalize(raws[0]);
+
+    expect(listing.latitude).toBe(null);
+    expect(listing.longitude).toBe(null);
+  });
+
+  it('street in the listing text → postcode-paired geocodeHint for the BAN street tier', async () => {
+    seedGate();
+    const payload = fixture('match.json');
+    payload.propertyDocument.description = 'Bel appartement rue de Charonne au coeur du 11e, proche métro.';
+    insertFixture('match.json', { payload });
+
+    const raws = await provider.config.getListings();
+    const listing = provider.config.normalize(raws[0]);
+
+    expect(listing.geocodeHint).toBe('rue de Charonne 75011');
+  });
+
+  it('no street in the text → null geocodeHint (native coords stay authoritative)', async () => {
+    seedGate();
+    insertFixture('match.json');
+
+    const raws = await provider.config.getListings();
+    const listing = provider.config.normalize(raws[0]);
+
+    expect(listing.geocodeHint).toBe(null);
+  });
+
+  it('street in the text but no zipcode → null geocodeHint (postcode pairing required)', () => {
+    const payload = fixture('match.json');
+    payload.propertyDocument.description = 'Bel appartement rue de Charonne.';
+    payload.propertyDocument.city.zipcode = '';
+
+    const listing = provider.config.normalize({ kind: 'match', payload, eventAt: MATCH_EVENT_AT });
+
+    expect(listing.geocodeHint).toBe(null);
+  });
+
+  it('coordinates survive the REAL Fredy pipeline (geocode step skips them)', async () => {
+    seedGate();
+    insertFixture('match.json');
+
+    const Fredy = await mockFredy();
+    const mockedJob = { id: 'paris-hunter', notificationAdapter: null, specFilter: null, spatialFilter: null };
+    const similarityCache = { checkAndAddEntry: () => false };
+    const fredy = new Fredy(provider.config, mockedJob, provider.metaInformation.id, similarityCache, undefined);
+    const listings = await fredy.execute();
+
+    expect(listings).toHaveLength(1);
+    expect(listings[0].latitude).toBe(48.8578);
+    expect(listings[0].longitude).toBe(2.3841);
+  });
+});

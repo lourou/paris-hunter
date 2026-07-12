@@ -101,6 +101,20 @@ without that log line is a bug.
 - `ui/src/components/map/Map.jsx` intentionally diverges from upstream (Paris
   default center/zoom, `FRANCE_BOUNDS` instead of `GERMANY_BOUNDS`); rebases may
   conflict there — resolve by keeping the France bounds.
+- Geocoding intentionally diverges from upstream (which is Germany-only):
+  - `lib/services/geocoding/geoCodingService.js` routes BAN
+    (api-adresse.data.gouv.fr, our additive `client/banClient.js`) first,
+    Nominatim as fallback; paused only when both geocoders are paused. It also
+    adds `geocodeListing` — the listing precision ladder: BAN street tier on
+    the provider's `geocodeHint` (street extracted from listing text,
+    postcode-paired, accepted only at street/housenumber precision) → native
+    payload coordinates → free-text address fallback.
+  - `lib/services/geocoding/client/nominatimClient.js` replaces the hardcoded
+    `&countrycodes=de` with the optional `GEOCODER_COUNTRY` env (default unset
+    = worldwide).
+  - `lib/FredyPipelineExecutioner.js` `_geocode` delegates to `geocodeListing`
+    instead of always geocoding `listing.address`.
+  Rebases may conflict in those three files — resolve by keeping our versions.
 
 ## v2 backlog (out of scope, see brief §6)
 
