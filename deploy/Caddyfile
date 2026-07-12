@@ -68,3 +68,29 @@ fredy.example.com {
 	# served directly by Scaleway Object Storage:
 	#   https://paris-hunter.s3.fr-par.scw.cloud/attachments/<file>
 }
+
+# --- Scanner noise: unknown hosts get NO answer ----------------------------
+# Anything not addressed to fredy.example.com by name (bare-IP probes, empty
+# Host headers, random vhosts) gets the connection ABORTED — no status line,
+# no auto-HTTPS 308 redirect to fingerprint (observed live 2026-07: Mozi
+# botnet probes and inventory scanners collecting the default redirect).
+# Host-matched sites sort before catch-alls, so the vhost above always wins.
+
+# Port 80, catch-all. Caddy still auto-creates the HTTP->HTTPS redirect for
+# fredy.example.com and that host-matched route matches first; every other
+# Host (or none) falls through to here and is dropped mid-connection.
+http:// {
+	abort
+}
+
+# Port 443, catch-all. `tls internal` + `on_demand` mints a throwaway
+# internal-CA cert for whatever bogus SNI the scanner sends, so unknown
+# names NEVER trigger ACME (no Let's Encrypt calls / rate-limit burn); the
+# request is then aborted. Clients sending no SNI at all (bare-IP scans)
+# simply fail the TLS handshake — equally silent.
+https:// {
+	tls internal {
+		on_demand
+	}
+	abort
+}
