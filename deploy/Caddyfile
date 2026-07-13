@@ -7,14 +7,46 @@
 # the loopback-only port mapping (see deploy/compose.yml and docs/DEPLOY.md
 # "Admin UI over Tailscale").
 
-fredy.example.com {
-	# --- Access log (incident 2026-07-12) ------------------------------------
-	# Log EVERY request on this vhost (webhook hits, 403 denies, 404s) to stdout
-	# (`docker logs paris-hunter-caddy-1`): without it, a delivery answered 200
-	# left no trace anywhere between Stream Estate and the app. The webhook
-	# secret travels as a path segment — redact it before it reaches the log.
-	log {
+{
+	# Access records are emitted under a dedicated name so two global loggers
+	# can encode the same event differently. Keep them out of Caddy's default
+	# runtime logger; otherwise every request would also appear as verbose JSON
+	# on stderr.
+	log default {
+		exclude http.log.access.paris_hunter
+	}
+
+	# Operator stream: one readable line on stdout, without header/TLS payloads.
+	# The path filter MUST stay in sync with the forensic logger below.
+	log paris_hunter_console {
+		include http.log.access.paris_hunter
 		output stdout
+		format filter {
+			wrap console {
+				time_format rfc3339
+				level_format upper
+			}
+			fields {
+				request>uri regexp /api/webhook/stream-estate/[^/]+ /api/webhook/stream-estate/<redacted>
+				request>headers delete
+				request>tls delete
+				request>proto delete
+				request>remote_port delete
+				request>client_ip delete
+				resp_headers delete
+				bytes_read delete
+				user_id delete
+			}
+		}
+	}
+
+	# Forensic stream: full structured records in Caddy's persistent data volume.
+	log paris_hunter_json {
+		include http.log.access.paris_hunter
+		output file /data/access.json {
+			roll_keep 10
+			roll_keep_for 720h
+		}
 		format filter {
 			wrap json
 			fields {
@@ -22,6 +54,15 @@ fredy.example.com {
 			}
 		}
 	}
+}
+
+fredy.example.com {
+	# --- Access log (incident 2026-07-12) ------------------------------------
+	# Log EVERY request on this vhost (webhook hits, 403 denies, 404s): without
+	# it, a delivery answered 200 left no trace anywhere between Stream Estate
+	# and the app. The named logger feeds the redacted console + forensic outputs
+	# above; never log the webhook secret path through an unfiltered encoder.
+	log paris_hunter
 
 	# --- Stream Estate webhook ---------------------------------------------
 	# Two factors: IP allowlist here (Stream Estate egress IP) + the secret
