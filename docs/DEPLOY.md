@@ -101,6 +101,25 @@ successfully" still appears), so a plain "did it come up" check misses it.
 The adapter's expected first-run state without an invite is `degraded(no-invite)`
 — that one is normal and allowed.
 
+### Reading the logs
+
+Use the operator helper from any working directory. It follows meaningful webhook and
+`paris-hunter` pipeline events by default; `all` includes compact Caddy/Fredy output, and
+`errors` keeps non-2xx Caddy requests plus Fredy warnings and errors. Add `--since 30m`
+(or another Compose duration) to any mode.
+
+```bash
+tools/paris-hunter/logs.sh
+tools/paris-hunter/logs.sh all --since 1h
+tools/paris-hunter/logs.sh errors
+```
+
+Raw Caddy JSON can be compacted without the helper when stdout uses the JSON encoder:
+
+```bash
+docker compose -f deploy/compose.yml logs -f --no-log-prefix caddy | jq -rR 'fromjson? | select(.request) | "\(.ts|todate)  \(.request.remote_ip)  \(.request.method) \(.request.host)\(.request.uri) -> \(.status)"'
+```
+
 If you later change any port mapping (e.g. `PUBLIC_BIND_IP`), apply it with `down` then
 `up -d` — stop-then-start, per the single-writer discipline (§6) anyway.
 
