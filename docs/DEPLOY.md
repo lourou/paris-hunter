@@ -230,10 +230,10 @@ docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/boot
 #    ⚠️ The receiver must be STOPPED here (it is: it has not started yet). seed.js REFUSES
 #    to run while fredy is up — stop it first: docker compose stop fredy.
 #    --confirm-live is the deliberate consent gate for the billable live poll — seed.js
-#    refuses to poll without it. It walks fromDate/toDate windows (NEVER page=N — the live
-#    API bills every response item incl. duplicates, see §7), prints per-page progress with
-#    a running € estimate, and ABORTS past max(3× uniques, PH_SEED_MAX_ITEMS [default 2000])
-#    billed items so a misbehaving API cannot burn the account (incident 2026-07-11).
+#    refuses to poll without it. It follows the vendor-canonical hydra:next link walk
+#    (single query, each listing delivered exactly once — see §7), prints per-page progress
+#    with a running € estimate, and ABORTS past max(3× uniques, PH_SEED_MAX_ITEMS [default
+#    2000]) billed items so a misbehaving API cannot burn the account (incident 2026-07-11).
 docker compose -f deploy/compose.yml run --rm fredy node tools/paris-hunter/seed.js --confirm-live
 
 # 5. Start the receiver stack BEFORE enablement
@@ -312,18 +312,22 @@ counter (`usage:<YYYY-MM>` in `paris_hunter_meta`, incremented per accepted webh
   items/month (realistic estimate is 90–620).
 
 **Cost note — billing semantics OBSERVED on the dashboard (2026-07-11), superseding the recon
-assumptions:**
+assumptions — and since VENDOR-CONFIRMED in writing (2026-07-13): billing is per delivered item
+(webhooks do not rebill unchanged listings), and seed uses hydra-link pagination
+(vendor-canonical):**
 
 - An "item" is **every item returned in every response, duplicates included** — re-fetching a
   listing bills it again. There is no billing dedupe on re-fetch.
 - `/documents/properties` responses carried **~58 items despite `itemsPerPage=30`** (documented
   max is 30) — never trust the requested page size for cost estimates.
-- `page=N` pagination overlaps (no strict cursor): the original seed walk re-fetched ~450 unique
-  listings ~25x each → **11,580 items billed ≈ −€133**. That is why `seed.js` walks
-  **`fromDate`/`toDate` windows ordered by `createdAt`** (boundary timestamp group re-fetched at
-  most once) and carries a **hard billing guard**: it aborts past
-  `max(3 × uniques, PH_SEED_MAX_ITEMS [default 2000])` billed items, printing a running € estimate
-  per page (~€0.01/item).
+- Hand-built `page=N` pagination overlaps (no strict cursor): the original seed walk re-fetched
+  ~450 unique listings ~25x each → **11,580 items billed ≈ −€133**. That is why `seed.js` follows
+  the **vendor-canonical hydra-link walk** (ONE query, then `hydra:view` → `hydra:next` until
+  absent — each listing delivered exactly once) and carries a **hard billing guard**: it aborts
+  past `max(3 × uniques, PH_SEED_MAX_ITEMS [default 2000])` billed items, printing a running €
+  estimate per page (~€0.01/item).
+- Backlog: the Stream Estate V2 API (beta) has native cursors — next.docs.stream.estate —
+  candidate future migration.
 - `seed.js` is the ONLY code path that polls a billable endpoint; the receiver only ingests
   pushed webhooks and `bootstrap.js`/`budget.js` touch `/searches` management endpoints only.
 
