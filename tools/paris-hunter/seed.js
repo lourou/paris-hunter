@@ -25,23 +25,22 @@
  * minted here (v3 A5) — bootstrap.js --enable-notifications mints the cutoff
  * at enable time. Refuses to re-run when seededAt exists (--force overrides).
  *
- * ⚠️ LIVE + BILLABLE PATH — READ THIS (live incident 2026-07-11):
- * Stream Estate bills EVERY item in EVERY response, duplicates included. The
- * dashboard proved it: a naive 200-page `page=N` walk re-fetched ~450 unique
- * listings ~25x each → 11,580 billed items (≈ −€133). Two API realities drive
- * the design below:
- *   - `page`/`itemsPerPage` are NOT a safe cursor: responses carried ~58
- *     items despite `itemsPerPage=30` (documented max 30), and pages
- *     overlap. NEVER paginate the billable endpoint with `page=N`.
- *   - The only reliable walk is a DATE WINDOW: `fromDate` (inclusive, on
- *     property createdAt) + `order[createdAt]=asc`, advancing strictly past
- *     the last COMPLETE timestamp group each round, `toDate` frozen at run
- *     start. Boundary groups may be re-fetched ONCE (deduped locally); whole
- *     windows never are.
+ * ⚠️ LIVE + BILLABLE PATH — READ THIS (live incident 2026-07-11, method
+ * vendor-confirmed 2026-07-13):
+ * Stream Estate bills EVERY delivered item. The dashboard proved it: a naive
+ * 200-page hand-built `page=N` walk re-fetched ~450 unique listings ~25x each
+ * → 11,580 billed items (≈ −€133). Stream Estate support has since CONFIRMED
+ * IN WRITING the canonical pagination for the listing endpoint: issue ONE
+ * query (`page` + `itemsPerPage`, max 30) and follow the Hydra links —
+ * `hydra:view` → `hydra:next` — until `hydra:next` is absent. That walk
+ * delivers each property exactly once (no date windows, no hand-advanced
+ * page numbers), which under per-delivered-item billing is the cheapest
+ * possible full pull. NEVER hand-build `page=N` URLs on this endpoint.
  * A hard billing guard tracks items returned and ABORTS the run when
  * returned > max(3 × uniques, PH_SEED_MAX_ITEMS [default 2000]) — so a
- * misbehaving API can never silently burn the account again. Progress is
- * printed per window (items returned, new uniques, running € estimate).
+ * misbehaving API (e.g. a looping `hydra:next`) can never silently burn the
+ * account again. Progress is printed per page (items returned, new uniques,
+ * running € estimate).
  * Gated behind --confirm-live; MUST NOT run before go-live checklist §E.1.
  * Offline tests inject fetchImpl mocks.
  *
@@ -55,8 +54,8 @@ import { PH } from '../../lib/services/paris-hunter/phConfig.js';
 import { getParisHunterMeta, setParisHunterMeta, toEpochMs } from '../../lib/services/paris-hunter/inbox.js';
 import { streamEstateApiBase } from '../../lib/services/paris-hunter/budget.js';
 
-const PAGE_SIZE = 30; // requested — the live API has been observed to return ~58 anyway
-const MAX_WINDOWS = 200; // absolute safety valve; the billing guard fires far earlier
+const PAGE_SIZE = 30; // documented max for itemsPerPage
+const MAX_PAGES = 200; // absolute safety valve; the billing guard fires far earlier
 const ITEM_COST_EUR = 0.01; // recon §1 estimate — used for progress/abort messages only
 const DEFAULT_MAX_ITEMS = 2000;
 const FETCH_TIMEOUT_MS = 60_000;
@@ -72,14 +71,15 @@ export const seedMaxItems = (env = process.env) => {
 };
 
 /**
- * Billable poll URL for one date window. NEVER uses `page=N` (see header).
+ * Billable poll URL — the SINGLE initial query of the hydra-link walk
+ * (vendor-canonical, confirmed in writing 2026-07-13). Subsequent pages come
+ * ONLY from the response's `hydra:view`.`hydra:next` link — never from
+ * hand-built `page=N` URLs (see header).
  *
  * @param {string} base API base
- * @param {NodeJS.ProcessEnv} env
- * @param {{ fromDate?: string|null, toDate?: string|null }} window ISO bounds (inclusive)
  * @returns {string}
  */
-export const buildPollUrl = (base, env, { fromDate = null, toDate = null } = {}) => {
+export const buildPollUrl = (base) => {
   const params = new URLSearchParams();
   params.set('transactionType', '1');
   params.append('propertyTypes[]', '0');
@@ -93,14 +93,18 @@ export const buildPollUrl = (base, env, { fromDate = null, toDate = null } = {})
   params.set('furnished', 'false');
   params.set('itemsPerPage', String(PAGE_SIZE));
   params.set('order[createdAt]', 'asc');
-  if (fromDate != null) {
-    params.set('fromDate', fromDate);
-  }
-  if (toDate != null) {
-    params.set('toDate', toDate);
-  }
   return `${base}/documents/properties?${params.toString()}`;
 };
+
+/**
+ * Resolve a Hydra link (API Platform emits root-relative `@id` paths like
+ * `/documents/properties?...&page=2`) against the API base.
+ *
+ * @param {string} base API base (no trailing slash)
+ * @param {string} link `hydra:next` value
+ * @returns {string} absolute URL
+ */
+export const resolveHydraLink = (base, link) => (/^https?:\/\//.test(link) ? link : `${base}${link}`);
 
 const markSeen = (dedupKey) => {
   const info = SqliteConnection.execute(
@@ -131,7 +135,8 @@ export const runSeed = async ({ argv = [], fetchImpl = fetch, env = process.env,
   console.log(
     `paris-hunter seed: starting — mode=${mode}, base=${base}, zips=${PH.zips.join('/')}, ` +
       `budget=${PH.serverBudgetMin}-${PH.serverBudgetMax}, rooms=${PH.roomsMin}-${PH.roomsMax}, ` +
-      `pageSize=${PAGE_SIZE} (observed live: ~58/response), maxWindows=${MAX_WINDOWS}, itemGuard=${maxItems}`,
+      `pageSize=${PAGE_SIZE}, pagination=hydra:next link walk (vendor-canonical), ` +
+      `maxPages=${MAX_PAGES}, itemGuard=${maxItems}`,
   );
 
   if (env.STREAM_ESTATE_API_KEY == null || env.STREAM_ESTATE_API_KEY === '') {
@@ -175,26 +180,27 @@ export const runSeed = async ({ argv = [], fetchImpl = fetch, env = process.env,
         'polling /documents/properties is LIVE + BILLABLE (go-live checklist E.1 must be confirmed) — re-run with --confirm-live, or use --no-poll',
       );
     }
-    const toDate = new Date(now()).toISOString();
     if (dryRun) {
       console.log(
-        `[dry-run] would walk date windows: ${buildPollUrl(base, env, { toDate })} ` +
-          `(fromDate advances past each response's last complete timestamp; abort past ${maxItems} billed items)`,
+        `[dry-run] would walk hydra:next links from: ${buildPollUrl(base)} ` +
+          `(single query; follows hydra:view → hydra:next until absent — each property delivered once; ` +
+          `abort past ${maxItems} billed items)`,
       );
     } else {
-      // ⚠️ LIVE BILLABLE polling loop — date-window walk, never `page=N`.
-      const seenThisRun = new Set(); // uniques for the billing guard (dedup across boundary re-fetches)
-      let fromDate = null; // first window: unbounded start
-      let fromEpoch = -Infinity;
-      for (let window = 1; window <= MAX_WINDOWS + 1; window += 1) {
-        if (window > MAX_WINDOWS) {
-          throw new Error(`window count exceeded the ${MAX_WINDOWS} safety valve — aborting (API misbehaving?)`);
+      // ⚠️ LIVE BILLABLE polling loop — hydra:next link walk (vendor-canonical,
+      // confirmed 2026-07-13). ONE initial query; every subsequent URL comes
+      // from the response itself. Never hand-build `page=N`.
+      const seenThisRun = new Set(); // uniques for the billing guard
+      let nextUrl = buildPollUrl(base);
+      for (let page = 1; nextUrl != null; page += 1) {
+        if (page > MAX_PAGES) {
+          throw new Error(`page count exceeded the ${MAX_PAGES} safety valve — aborting (API misbehaving?)`);
         }
-        const pollResponse = await timedFetch(buildPollUrl(base, env, { fromDate, toDate }), {
+        const pollResponse = await timedFetch(nextUrl, {
           headers: headersFor(env),
         });
         if (!pollResponse.ok) {
-          throw new Error(`GET /documents/properties window ${window} returned ${pollResponse.status}`);
+          throw new Error(`GET /documents/properties page ${page} returned ${pollResponse.status}`);
         }
         const body = await pollResponse.json();
         const members = Array.isArray(body) ? body : (body?.['hydra:member'] ?? []);
@@ -205,18 +211,7 @@ export const runSeed = async ({ argv = [], fetchImpl = fetch, env = process.env,
         summary.itemsReturned += members.length;
 
         const uniqueBefore = seenThisRun.size;
-        let maxEpoch = -Infinity;
-        let maxCreatedAt = null;
-        let minEpoch = Infinity;
         for (const doc of members) {
-          const epoch = toEpochMs(doc?.createdAt);
-          if (epoch != null) {
-            if (epoch > maxEpoch) {
-              maxEpoch = epoch;
-              maxCreatedAt = doc.createdAt;
-            }
-            minEpoch = Math.min(minEpoch, epoch);
-          }
           if (typeof doc?.uuid !== 'string' || doc.uuid === '') {
             continue;
           }
@@ -247,7 +242,7 @@ export const runSeed = async ({ argv = [], fetchImpl = fetch, env = process.env,
         }
 
         console.log(
-          `paris-hunter seed: page ${window} — ${members.length} items returned, ` +
+          `paris-hunter seed: page ${page} — ${members.length} items returned, ` +
             `${seenThisRun.size - uniqueBefore} new listings marked seen — running total: ${seenThisRun.size} unique, ` +
             `${summary.itemsReturned} items billed ≈ ${euro(summary.itemsReturned)}`,
         );
@@ -255,6 +250,7 @@ export const runSeed = async ({ argv = [], fetchImpl = fetch, env = process.env,
         // HARD BILLING GUARD (live incident 2026-07-11: 11,580 items billed
         // for 450 uniques). Abort — and do NOT write seededAt — the moment
         // billed items exceed both 3× the uniques discovered and the cap.
+        // With hydra links this also catches a maliciously looping hydra:next.
         const guard = Math.max(3 * seenThisRun.size, maxItems);
         if (summary.itemsReturned > guard) {
           throw new Error(
@@ -265,35 +261,10 @@ export const runSeed = async ({ argv = [], fetchImpl = fetch, env = process.env,
           );
         }
 
-        // Window exhausted? hydra:totalItems counts everything matching the
-        // CURRENT window — when this response carried it all, we are done.
-        const totalItems = typeof body?.['hydra:totalItems'] === 'number' ? body['hydra:totalItems'] : null;
-        if (totalItems != null ? totalItems <= members.length : members.length < PAGE_SIZE) {
-          break;
-        }
-
-        // Truncated window → advance. fromDate is INCLUSIVE on createdAt:
-        //  - normal case (≥2 distinct timestamps): restart AT the last
-        //    timestamp — only that boundary group is ever re-fetched (its
-        //    tail may have been cut mid-group), everything before it never is;
-        //  - degenerate case (whole response shares ONE timestamp): stepping
-        //    to it would re-pull the identical window forever, so step 1s
-        //    past it and warn (same-second overflow beyond a full response
-        //    is not resolvable through this API).
-        if (maxCreatedAt == null) {
-          throw new Error('window items carry no parseable createdAt — cannot advance the date window, aborting');
-        }
-        if (maxEpoch > minEpoch && maxEpoch > fromEpoch) {
-          fromDate = maxCreatedAt;
-          fromEpoch = maxEpoch;
-        } else {
-          console.log(
-            `paris-hunter seed: WARNING — a full response shares createdAt ${maxCreatedAt}; stepping 1s past it ` +
-              '(any additional same-second listings beyond this response cannot be fetched without re-billing the window).',
-          );
-          fromEpoch = maxEpoch + 1000;
-          fromDate = new Date(fromEpoch).toISOString();
-        }
+        // Follow the vendor-canonical link: hydra:view → hydra:next. Absent
+        // link (or absent view — a single-page collection) means DONE.
+        const next = body?.['hydra:view']?.['hydra:next'];
+        nextUrl = typeof next === 'string' && next !== '' ? resolveHydraLink(base, next) : null;
       }
     }
   }
@@ -306,7 +277,7 @@ export const runSeed = async ({ argv = [], fetchImpl = fetch, env = process.env,
   setParisHunterMeta('seededAt', String(now()));
   summary.seededAt = true;
   console.log(
-    `paris-hunter seed: done — ${summary.seeded} new seen key(s) across ${summary.pages} window(s), ` +
+    `paris-hunter seed: done — ${summary.seeded} new seen key(s) across ${summary.pages} page(s), ` +
       `${summary.itemsReturned} items billed ≈ ${euro(summary.itemsReturned)}` +
       `${storeForUi ? `, ${summary.stored} stored for UI` : ''}. Meta seededAt written.`,
   );

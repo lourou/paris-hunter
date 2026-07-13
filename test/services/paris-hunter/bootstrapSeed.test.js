@@ -56,19 +56,22 @@ const serializeSearch = (stored) => {
  * GET/POST /searches, GET/PUT /searches/{id}, GET /documents/properties and
  * the receiver health URL.
  *
- * /documents/properties mirrors the LIVE billing contract (incident
- * 2026-07-11): every item in every response bills, `responsePageSize` items
- * come back regardless of itemsPerPage, fromDate/toDate are inclusive on
- * createdAt, hydra:totalItems counts the whole filtered window.
- * `ignoreDateFilters` emulates the worst-case API that re-returns the same
- * items no matter the window (what the billing guard must catch).
+ * /documents/properties mirrors the vendor-canonical Hydra pagination
+ * (confirmed in writing 2026-07-13): `page` slices of `responsePageSize`
+ * items (the server's choice — the live API has ignored itemsPerPage before)
+ * with a JSON-LD `hydra:view` carrying root-relative
+ * `hydra:first`/`hydra:last`/`hydra:next` links; `hydra:next` is absent on
+ * the last page, so following it delivers each document EXACTLY ONCE. Every
+ * delivered item bills (incident 2026-07-11). `loopNext` emulates the
+ * worst-case API that re-returns the same items with a never-ending
+ * hydra:next (what the billing guard must catch).
  */
 const makeApi = ({
   searches = [],
   healthStatus = 200,
   documents = [],
   responsePageSize = 58,
-  ignoreDateFilters = false,
+  loopNext = false,
 } = {}) => {
   const state = { searches: new Map(searches.map((s) => [s['@id'], s])), calls: [], nextId: 100 };
   const json = (body, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
@@ -107,20 +110,38 @@ const makeApi = ({
       return json(serializeSearch(updated));
     }
     if (pathname === '/documents/properties' && method === 'GET') {
-      if (ignoreDateFilters) {
+      const page = Number(searchParams.get('page') ?? '1');
+      // Root-relative link preserving all query params — API Platform shape.
+      const link = (p) => {
+        const params = new URLSearchParams(searchParams);
+        params.set('page', String(p));
+        return `/documents/properties?${params.toString()}`;
+      };
+      if (loopNext) {
+        // Malicious API: the same items on every page, hydra:next forever.
         return json({
           'hydra:member': documents.slice(0, responsePageSize),
-          'hydra:totalItems': documents.length + responsePageSize, // always looks truncated
+          'hydra:totalItems': documents.length,
+          'hydra:view': {
+            '@id': link(page),
+            '@type': 'hydra:PartialCollectionView',
+            'hydra:next': link(page + 1),
+          },
         });
       }
-      const fromDate = searchParams.get('fromDate');
-      const toDate = searchParams.get('toDate');
-      const fromMs = fromDate != null ? Date.parse(fromDate) : -Infinity;
-      const toMs = toDate != null ? Date.parse(toDate) : Infinity;
-      const window = documents
-        .filter((d) => Date.parse(d.createdAt) >= fromMs && Date.parse(d.createdAt) <= toMs)
-        .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
-      return json({ 'hydra:member': window.slice(0, responsePageSize), 'hydra:totalItems': window.length });
+      const sorted = [...documents].sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt));
+      const lastPage = Math.max(1, Math.ceil(sorted.length / responsePageSize));
+      return json({
+        'hydra:member': sorted.slice((page - 1) * responsePageSize, page * responsePageSize),
+        'hydra:totalItems': sorted.length,
+        'hydra:view': {
+          '@id': link(page),
+          '@type': 'hydra:PartialCollectionView',
+          'hydra:first': link(1),
+          'hydra:last': link(lastPage),
+          ...(page < lastPage ? { 'hydra:next': link(page + 1) } : {}),
+        },
+      });
     }
     return json({ error: `unrouted ${method} ${url}` }, 500);
   });
@@ -398,7 +419,7 @@ describe('seed (v2 lane 2, v3 A5 — seededAt only, no watermark)', () => {
       searches: [ownedSearch('/searches/1', extra.searchState)],
       documents: extra.documents ?? seedDocs,
       responsePageSize: extra.responsePageSize ?? 58,
-      ignoreDateFilters: extra.ignoreDateFilters ?? false,
+      loopNext: extra.loopNext ?? false,
     });
   };
 
@@ -452,66 +473,67 @@ describe('seed (v2 lane 2, v3 A5 — seededAt only, no watermark)', () => {
     await expect(runSeed({ argv: ['--no-poll', '--force'], fetchImpl })).resolves.toBeTruthy();
   });
 
-  describe('billable pagination — date-window walk, NEVER page=N (live incident 2026-07-11)', () => {
+  describe('billable pagination — hydra:next link walk, vendor-canonical (confirmed 2026-07-13)', () => {
     const T = (h) => `2026-06-01T${String(h).padStart(2, '0')}:00:00.000Z`;
 
-    it('walks fromDate windows to completion; boundary timestamp group is re-fetched ONCE, whole windows never', async () => {
-      // a(t1), b(t2), c(t2), d(t3), page size 3: window 2 restarts AT t2
-      // (boundary group b,c re-billed once, deduped locally), then totalItems
-      // says exhausted.
-      const docs = [docAt(1, T(1)), docAt(2, T(2)), docAt(3, T(2)), docAt(4, T(3))];
-      const { state, fetchImpl } = armSeed({ documents: docs, responsePageSize: 3 });
-      const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
-
-      const polls = state.calls.filter((c) => c.url.includes('/documents/properties'));
-      expect(polls).toHaveLength(2);
-      for (const call of polls) {
-        expect(call.url).not.toContain('page=');
-        expect(call.url).toContain(encodeURIComponent('order[createdAt]') + '=asc');
-        expect(call.url).toContain('toDate=');
-      }
-      expect(polls[0].url).not.toContain('fromDate=');
-      expect(polls[1].url).toContain(`fromDate=${encodeURIComponent(T(2))}`);
-
-      expect(summary.seeded).toBe(4); // every unique marked exactly once
-      expect(summary.itemsReturned).toBe(6); // 3 + 3 (b,c re-billed at the boundary)
-      expect(summary.pages).toBe(2);
-      expect(holder.current.query('SELECT COUNT(1) AS c FROM ph_seen')[0].c).toBe(4);
-      expect(getParisHunterMeta('seededAt')).toMatch(/^\d+$/);
-    });
-
-    it('multi-window walk marks every unique exactly once and advances strictly', async () => {
+    it('issues ONE query and follows hydra:next links verbatim to completion — no hand-built page=N, no date windows', async () => {
       const docs = [1, 2, 3, 4, 5].map((i) => docAt(i, T(i)));
       const { state, fetchImpl } = armSeed({ documents: docs, responsePageSize: 2 });
       const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
 
-      expect(summary.seeded).toBe(5);
-      expect(summary.pages).toBe(4); // [1,2] [2,3] [3,4] [4,5] — 1-item boundary overlap each
-      expect(summary.itemsReturned).toBe(8);
-      const fromDates = state.calls
-        .filter((c) => c.url.includes('/documents/properties'))
-        .map((c) => new URL(c.url).searchParams.get('fromDate'));
-      expect(fromDates).toEqual([null, T(2), T(3), T(4)]); // strictly increasing, no window repeated
-    });
+      const polls = state.calls.filter((c) => c.url.includes('/documents/properties'));
+      expect(polls).toHaveLength(3); // [1,2] [3,4] [5]
+      for (const call of polls) {
+        expect(call.url).not.toContain('fromDate=');
+        expect(call.url).not.toContain('toDate=');
+      }
+      // The initial query carries the filters but NO page number…
+      expect(polls[0].url).toContain('itemsPerPage=30');
+      expect(new URL(polls[0].url).searchParams.get('page')).toBe(null);
+      // …and every follow-up URL is exactly the server's hydra:next link.
+      expect(new URL(polls[1].url).searchParams.get('page')).toBe('2');
+      expect(new URL(polls[2].url).searchParams.get('page')).toBe('3');
 
-    it('handles a full response sharing ONE timestamp: steps 1s past it with a warning instead of re-pulling forever', async () => {
-      const docs = [docAt(1, T(1)), docAt(2, T(1)), docAt(3, T(1)), docAt(4, T(1))];
-      const { fetchImpl } = armSeed({ documents: docs, responsePageSize: 2 });
-      const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
-
-      expect(summary.pages).toBe(1); // second window (t1+1s) is empty — terminated
-      expect(summary.seeded).toBe(2); // the 2 same-second overflow docs are unreachable, by design
-      expect(logged().some((l) => l.includes('WARNING') && l.includes('shares createdAt'))).toBe(true);
+      expect(summary.seeded).toBe(5); // every unique marked exactly once
+      expect(summary.itemsReturned).toBe(5); // exact-once: billed == uniques
+      expect(summary.pages).toBe(3);
+      expect(holder.current.query('SELECT COUNT(1) AS c FROM ph_seen')[0].c).toBe(5);
       expect(getParisHunterMeta('seededAt')).toMatch(/^\d+$/);
     });
 
-    it('BILLING GUARD aborts (without seededAt) when the API re-returns items past max(3x uniques, PH_SEED_MAX_ITEMS)', async () => {
+    it('450 uniques → exactly 450 billed items across 15 pages (exact-once at incident scale)', async () => {
+      // The 2026-07-11 incident pulled these same ~450 uniques as 11,580
+      // billed items. The hydra walk must bill each exactly once.
+      const docs = Array.from({ length: 450 }, (unused, i) =>
+        docAt(i, new Date(Date.UTC(2026, 5, 1) + i * 60_000).toISOString()),
+      );
+      const { fetchImpl } = armSeed({ documents: docs, responsePageSize: 30 });
+      const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
+
+      expect(summary.seeded).toBe(450);
+      expect(summary.itemsReturned).toBe(450); // no re-fetch, ever
+      expect(summary.pages).toBe(15);
+      expect(holder.current.query('SELECT COUNT(1) AS c FROM ph_seen')[0].c).toBe(450);
+      expect(getParisHunterMeta('seededAt')).toMatch(/^\d+$/);
+    });
+
+    it('a single-page collection (hydra:next absent) terminates after exactly one request', async () => {
+      const docs = [1, 2, 3].map((i) => docAt(i, T(i)));
+      const { state, fetchImpl } = armSeed({ documents: docs, responsePageSize: 58 });
+      const summary = await runSeed({ argv: ['--confirm-live'], fetchImpl });
+
+      expect(state.calls.filter((c) => c.url.includes('/documents/properties'))).toHaveLength(1);
+      expect(summary.pages).toBe(1);
+      expect(summary.seeded).toBe(3);
+    });
+
+    it('BILLING GUARD aborts (without seededAt) when a malicious hydra:next loops past max(3x uniques, PH_SEED_MAX_ITEMS)', async () => {
       const docs = [1, 2, 3, 4, 5, 6].map((i) => docAt(i, T(i)));
-      const { fetchImpl } = armSeed({ documents: docs, responsePageSize: 6, ignoreDateFilters: true });
+      const { fetchImpl } = armSeed({ documents: docs, responsePageSize: 6, loopNext: true });
       const env = { ...process.env, PH_SEED_MAX_ITEMS: '10' };
 
       await expect(runSeed({ argv: ['--confirm-live'], fetchImpl, env })).rejects.toThrow(/BILLING GUARD/);
-      // threshold = max(3×6, 10) = 18 → tripped at 24 billed items (4th window)
+      // threshold = max(3×6, 10) = 18 → tripped at 24 billed items (4th page)
       expect(getParisHunterMeta('seededAt')).toBe(null);
     });
   });
@@ -541,21 +563,21 @@ describe('seed (v2 lane 2, v3 A5 — seededAt only, no watermark)', () => {
           ),
         ),
       ).toBe(true);
-      expect(lines.some((l) => /page 2 — .+ running total: 3 unique, 4 items billed ≈ €0\.04/.test(l))).toBe(true);
+      expect(lines.some((l) => /page 2 — .+ running total: 3 unique, 3 items billed ≈ €0\.03/.test(l))).toBe(true);
       expect(
         lines.some((l) =>
-          /done — 3 new seen key\(s\) across 2 window\(s\), 4 items billed ≈ €0\.04.*seededAt written/.test(l),
+          /done — 3 new seen key\(s\) across 2 page\(s\), 3 items billed ≈ €0\.03.*seededAt written/.test(l),
         ),
       ).toBe(true);
     });
 
-    it('--dry-run announces the window walk and the guard without touching /documents', async () => {
+    it('--dry-run announces the hydra link walk and the guard without touching /documents', async () => {
       const { state, fetchImpl } = armSeed();
       const summary = await runSeed({ argv: ['--dry-run'], fetchImpl });
 
       expect(summary.dryRun).toBe(true);
       expect(state.calls.some((c) => c.url.includes('/documents/'))).toBe(false);
-      expect(logged().some((l) => l.includes('[dry-run] would walk date windows'))).toBe(true);
+      expect(logged().some((l) => l.includes('[dry-run] would walk hydra:next links'))).toBe(true);
       expect(getParisHunterMeta('seededAt')).toBe(null);
     });
   });

@@ -14,7 +14,7 @@
  * mutable search object so the GET-verify loop can be observed end to end.
  *
  * usage: node tools/paris-hunter/qa/mock-stream-estate.js
- *          [--port 8998] [--documents 450] [--delay-ms 0]
+ *          [--port 8998] [--documents 450] [--delay-ms 0] [--legacy-overlap]
  *   GET  /searches            -> hydra collection with the one QA search
  *   GET  /searches/<id>       -> the QA search
  *   PUT  /searches/<id>       -> merges body into the search (records notificationEnabled)
@@ -23,16 +23,23 @@
  *   GET  /__requests          -> QA introspection: every recorded request (method, url, body)
  *   POST /__reset             -> clears state
  *
- * /documents/properties emulates the REAL billing trap observed live on
- * 2026-07-11 (11,580 items billed for 450 uniques, −€133):
+ * /documents/properties serves the vendor-canonical Hydra pagination
+ * (confirmed in writing by Stream Estate support, 2026-07-13; envelope shape
+ * per the docs mirror of GET /documents/properties): `page` + `itemsPerPage`
+ * (max 30) slices with a JSON-LD `hydra:view` object carrying root-relative
+ * `hydra:first`/`hydra:last`/`hydra:next` links — `hydra:next` absent on the
+ * final page. Following hydra:next delivers each document EXACTLY ONCE, the
+ * contract seed.js's link walk (and per-delivered-item billing) relies on.
+ * fromDate/toDate (inclusive, on createdAt) and order[createdAt] are honored.
+ *
+ * --legacy-overlap re-enables the REAL billing trap observed live on
+ * 2026-07-11 (11,580 items billed for 450 uniques, −€133) for the billing
+ * guard's regression test:
  *   - every response carries 58 items regardless of itemsPerPage (documented
  *     max is 30 — the live API ignored it);
- *   - WITHOUT date filters, `page=N` windows overlap heavily (start advances
- *     by 2 while 58 are returned → each item re-served ~25x, and pages never
- *     come back empty within a 200-page walk) — exactly the incident;
- *   - WITH fromDate/toDate (inclusive, on createdAt) + order[createdAt], the
- *     window is filtered/sorted honestly and hydra:totalItems is correct —
- *     the contract seed.js's date-window walk relies on.
+ *   - page windows overlap heavily (start advances by 2 while 58 are
+ *     returned → each item re-served ~25x) and hydra:next NEVER runs out —
+ *     a compliant hydra walker would loop until its billing guard trips.
  * Dataset: --documents N (default 450) items, uuid qa-doc-<i>, createdAt
  * spread hourly from 2026-06-01T00:00:00Z. --delay-ms stalls every response
  * (QA for the silent-hang class).
@@ -59,9 +66,11 @@ const args = process.argv.slice(2);
 const port = args.includes('--port') ? Number(args[args.indexOf('--port') + 1]) : 8998;
 const documentCount = args.includes('--documents') ? Number(args[args.indexOf('--documents') + 1]) : 450;
 const delayMs = args.includes('--delay-ms') ? Number(args[args.indexOf('--delay-ms') + 1]) : 0;
+const legacyOverlap = args.includes('--legacy-overlap');
 
-// Observed live page size (itemsPerPage=30 was requested and ignored).
-const REAL_PAGE_SIZE = 58;
+const MAX_ITEMS_PER_PAGE = 30; // documented max; requests above it are clamped
+// Observed live page size in the 2026-07-11 incident (itemsPerPage ignored).
+const LEGACY_PAGE_SIZE = 58;
 // Legacy `page=N` overlap: the window start advances by 2 items per page
 // while 58 items are returned → ~25x duplication, the 2026-07-11 incident.
 const LEGACY_PAGE_STEP = 2;
@@ -72,29 +81,68 @@ const documents = Array.from({ length: documentCount }, (unused, i) => ({
   createdAt: new Date(DOCUMENTS_EPOCH + i * 3_600_000).toISOString(),
 }));
 
-const serveDocuments = (searchParams) => {
-  const fromDate = searchParams.get('fromDate');
-  const toDate = searchParams.get('toDate');
-  const order = searchParams.get('order[createdAt]');
+/** Root-relative hydra link for `page`, preserving all other query params (API Platform shape). */
+const hydraLink = (searchParams, page) => {
+  const params = new URLSearchParams(searchParams);
+  params.set('page', String(page));
+  return `/documents/properties?${params.toString()}`;
+};
 
-  if (fromDate == null && toDate == null) {
-    // Legacy page mode: the billing trap.
-    const page = Number(searchParams.get('page') ?? '1');
+const serveDocuments = (searchParams) => {
+  const page = Math.max(1, Number(searchParams.get('page') ?? '1'));
+
+  if (legacyOverlap) {
+    // 2026-07-11 billing trap (behind --legacy-overlap): oversized
+    // overlapping windows, and hydra:next NEVER runs out — the walker's
+    // billing guard is the only thing that stops the burn.
     const start = (page - 1) * LEGACY_PAGE_STEP;
+    const members = documents.slice(start, start + LEGACY_PAGE_SIZE);
     return {
-      'hydra:member': documents.slice(start, start + REAL_PAGE_SIZE),
+      '@context': '/contexts/PropertyDocument',
+      '@id': '/documents/properties',
+      '@type': 'hydra:Collection',
+      'hydra:member': members,
       'hydra:totalItems': documents.length,
+      'hydra:view': {
+        '@id': hydraLink(searchParams, page),
+        '@type': 'hydra:PartialCollectionView',
+        'hydra:first': hydraLink(searchParams, 1),
+        ...(members.length > 0 ? { 'hydra:next': hydraLink(searchParams, page + 1) } : {}),
+      },
     };
   }
 
+  // Vendor-canonical mode: honest page/itemsPerPage slices, exact-once via
+  // hydra:next (absent on the last page).
+  const fromDate = searchParams.get('fromDate');
+  const toDate = searchParams.get('toDate');
+  const order = searchParams.get('order[createdAt]');
+  const requested = Number(searchParams.get('itemsPerPage') ?? '10');
+  const itemsPerPage = Math.min(Number.isFinite(requested) && requested > 0 ? requested : 10, MAX_ITEMS_PER_PAGE);
+
   const fromMs = fromDate != null ? Date.parse(fromDate) : -Infinity;
   const toMs = toDate != null ? Date.parse(toDate) : Infinity;
-  const window = documents.filter((d) => {
+  const filtered = documents.filter((d) => {
     const ms = Date.parse(d.createdAt);
     return ms >= fromMs && ms <= toMs; // both bounds inclusive, per the live docs
   });
-  window.sort((a, b) => (order === 'desc' ? -1 : 1) * (Date.parse(a.createdAt) - Date.parse(b.createdAt)));
-  return { 'hydra:member': window.slice(0, REAL_PAGE_SIZE), 'hydra:totalItems': window.length };
+  filtered.sort((a, b) => (order === 'desc' ? -1 : 1) * (Date.parse(a.createdAt) - Date.parse(b.createdAt)));
+
+  const lastPage = Math.max(1, Math.ceil(filtered.length / itemsPerPage));
+  return {
+    '@context': '/contexts/PropertyDocument',
+    '@id': '/documents/properties',
+    '@type': 'hydra:Collection',
+    'hydra:member': filtered.slice((page - 1) * itemsPerPage, page * itemsPerPage),
+    'hydra:totalItems': filtered.length,
+    'hydra:view': {
+      '@id': hydraLink(searchParams, page),
+      '@type': 'hydra:PartialCollectionView',
+      'hydra:first': hydraLink(searchParams, 1),
+      'hydra:last': hydraLink(searchParams, lastPage),
+      ...(page < lastPage ? { 'hydra:next': hydraLink(searchParams, page + 1) } : {}),
+    },
+  };
 };
 
 let requests = [];
