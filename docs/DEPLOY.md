@@ -486,8 +486,8 @@ on `${PUBLIC_BIND_IP}` only (set in `deploy/.env`, §0.4). If you see the sympto
   close 22 publicly. **Test first from a second session** (keep your current one open) before
   touching the firewall, or you can lock yourself out.
 - Nothing else needs to be open: `9998` is bound to `127.0.0.1` and is never publicly reachable.
-- **Scanner noise:** requests not addressed to `hunter.10u15.net` by name are aborted by Caddy
-  (no response, no auto-HTTPS 308); bare-IP probes get a TCP-level close — only the vhost answers.
+- **Scanner noise:** unknown-Host requests on port 80 are aborted by Caddy (TCP-level close, no
+  auto-HTTPS 308); on 443, unknown/absent SNI fails the TLS handshake — only the vhost answers.
 
 ## 13. Day-1 checklist
 
