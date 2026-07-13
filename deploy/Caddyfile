@@ -79,18 +79,13 @@ fredy.example.com {
 # Port 80, catch-all. Caddy still auto-creates the HTTP->HTTPS redirect for
 # fredy.example.com and that host-matched route matches first; every other
 # Host (or none) falls through to here and is dropped mid-connection.
+#
+# Port 443 needs NO catch-all: with no certificate for an unknown or absent
+# SNI, Caddy natively refuses the TLS handshake (dead socket, nothing
+# minted, no ACME). Do NOT add an `https:// { tls internal { on_demand } }`
+# block — on-demand issuance mints an internal cert for EVERY bogus SNI
+# (unbounded, abuse-able, logs "YOUR SERVER MAY BE VULNERABLE TO ABUSE")
+# and COMPLETES handshakes that would otherwise fail silently.
 http:// {
-	abort
-}
-
-# Port 443, catch-all. `tls internal` + `on_demand` mints a throwaway
-# internal-CA cert for whatever bogus SNI the scanner sends, so unknown
-# names NEVER trigger ACME (no Let's Encrypt calls / rate-limit burn); the
-# request is then aborted. Clients sending no SNI at all (bare-IP scans)
-# simply fail the TLS handshake — equally silent.
-https:// {
-	tls internal {
-		on_demand
-	}
 	abort
 }
