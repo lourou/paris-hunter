@@ -70,6 +70,15 @@ run, single-writer discipline, backup/restore). §0 is a copy-paste quickstart
   `seed.js` (mark existing market as seen), `setup-bucket.js` (bucket lifecycle),
   `qa/` (harness). Invoke with `node --env-file-if-exists=.env …` outside docker.
 - `.env.example` — every env var, documented. Local run: `yarn start:paris-hunter`.
+- **Reading the logs:** `tools/paris-hunter/logs.sh` gives readable, filtered views
+  of the running stack (details in `docs/DEPLOY.md`):
+
+  ```bash
+  tools/paris-hunter/logs.sh              # webhooks: real deliveries + pipeline decisions, scanner noise hidden (default)
+  tools/paris-hunter/logs.sh all          # everything, Caddy JSON compacted to one line each
+  tools/paris-hunter/logs.sh errors       # only non-2xx + Fredy warnings/errors
+  tools/paris-hunter/logs.sh webhooks --since 1h
+  ```
 - **Budget guard:** `PH_MONTHLY_ITEM_BUDGET` (default 900 items/month ≈ €9
   Stream Estate PAYG) — WARN logs from 70%, and at 90% the app **auto-disables
   the saved search** on the Stream Estate side; re-arm flow in `docs/DEPLOY.md` §7.
