@@ -2,6 +2,8 @@
 
 > **STATUS — DECISION 2026-07-13: STAY ON V1.** V1 is proven and remains available until approximately May 2027. Do **not** migrate yet; use this guide when a migration trigger fires.
 >
+> **Re-verified 2026-07-25:** decision unchanged (STAY ON V1). Verdict is now **GO-IF**: the single unblocking condition is Stream Estate routing `/account/*` (usage + event-destinations) to honour `X-API-KEY` — acceptance is `200` on both `GET /account/api-usage` and `GET /account/event-destinations` with the existing V2 key. Full re-investigation: `_orchestra/260709_2141_paris-hunter/workdir/v2-recon-260725/v2-viability-260725.md`.
+>
 > **Current live setup:** V1 REST + webhooks, ingress protected by the `144.76.91.183` IP allowlist and a secret URL path, €0.01/item PAYG, balance positive.
 
 This is the permanent implementation and cutover plan for moving paris-hunter from Stream Estate V1 to the V2 beta. It records the API findings and repository impact known on 2026-07-13. Revalidate beta behavior, pricing, and schemas before implementation.
@@ -15,7 +17,7 @@ This is the permanent implementation and cutover plan for moving paris-hunter fr
 
 ## Why not yet
 
-- `GET /account/api-usage` returns `401 {"code":401,"message":"JWT Token not found"}` when called with the otherwise-valid V2 API key. Budget auto-disable parity depends on reconciling against official usage, so account API-key auth is a release blocker. `/account/event-destinations` has the same problem.
+- `GET /account/api-usage` returns `401 {"code":401,"message":"JWT Token not found"}` when called with the otherwise-valid V2 API key. Budget auto-disable parity depends on reconciling against official usage, so account API-key auth is a release blocker. `/account/event-destinations` has the same problem. **Re-confirmed 2026-07-25**, plus a creative bypass pass found no workaround: 8 auth-header variants all 401 (Bearer → `Invalid JWT Token`, proving a live JWT validator), 7 candidate token-exchange endpoints (`/oauth/token`, `/token`, `/login_check`, …) all 404, `.well-known` discovery 404, the console (`console.stream.estate`) offers only GitHub/Google browser OAuth, and the MCP server (`api-v2.stream.estate/mcp`, where `X-API-KEY` does work) exposes only alert CRUD plus property/location search — no usage/billing tool. Conclusion: no documented or undocumented api-key→JWT path exists.
 - Exhausted V2 webhook retries suspend the destination. Migration needs a watchdog that detects suspension and a tested authenticated reactivation runbook; the current watchdog does neither.
 - V2 webhook egress IPs are undocumented. The current Caddy `remote_ip 144.76.91.183` gate would silently reject V2, so the gate must move to application-level HMAC verification.
 - Beta documentation and schemas are still changing quickly (docs were at v0.1.92 on 2026-07-01).
@@ -28,7 +30,7 @@ Migrate when **any** hard trigger fires, provided **all** readiness gates hold.
 ### Hard triggers — any one
 
 1. Stream Estate announces V1 deprecation or V2 GA. In all cases, start no later than **Q1 2027**: V1 EOL is expected around May 2027, and the migration needs at least two months of production soak.
-2. Published V2 pricing is at or below V1's effective cost for this workload (under €20/month), or Stream Estate announces that the unbilled beta window is closing. Complete the free reseed before that window closes; an earlier rehearsal reseed is reasonable while it remains free.
+2. Published V2 pricing is at or below V1's effective cost for this workload (under €20/month), or Stream Estate announces that the unbilled beta window is closing. Complete the free reseed before that window closes; an earlier rehearsal reseed is reasonable while it remains free. **Correction 2026-07-25:** the "unbilled beta window" / "free reseed" premise is unconfirmed — public pricing still shows PAYG €0.01/item with no published V2-beta exception. Treat V2 as metered until Stream Estate confirms a free/unbilled beta window in writing; do not authorize a reseed on the free-beta assumption alone.
 3. The project chooses to require HMAC-authenticated delivery. HMAC is the largest security improvement, and V2 has no documented egress IPs with which to preserve the current Caddy gate.
 
 ### Readiness gates — all required
@@ -142,6 +144,8 @@ Use the complete criteria tree above. The response is `{items, totalItems, hasNe
 
 V2 usage reports expose both calls and results, grouped by key, route, and channel. Webhook payloads are documented as avoiding an extra billed API call, but webhook billing itself is unspecified. Before cutover, obtain the V2 price sheet, precise billable units, beta-to-GA date, and confirmation that beta usage will not be billed retroactively. Keep the local atomic delivery counter, and reconcile it against `/account/api-usage` once API-key auth works.
 
+**Re-verified 2026-07-25:** public pricing (stream.estate/pricing) still advertises PAYG €0.01/item with no V2-beta exception. This doc's earlier "free beta" language is unsupported by any published or written source and should be treated as unconfirmed until Stream Estate states otherwise in writing.
+
 ## Migration surface
 
 All paths are repository-relative.
@@ -162,6 +166,8 @@ All paths are repository-relative.
 Estimated total: **about 4–6 engineer-days**, including mock-driven QA and a live cutover rehearsal.
 
 Explicitly unchanged: the Convos adapter and notifications (`lib/notification/**`), scoring, exclusions, message formatting, the Convos outbox and flush path, watchdog core, BAN geocoding, database schema/migrations, and `FredyPipelineExecutioner`. Search ID, watermark, config revision, and related metadata values are re-minted, but the tables do not change. The inbox drain, lease, transaction, and decision machinery remains intact.
+
+**Readiness note (2026-07-25):** the 2026-07-25 re-investigation judged the core pipeline (alerts, webhooks, normalization, budget-guard writes) migratable using only the working apiKey-authed endpoints, treating `/account/*` as unavailable — except the budget guard's usage-reconciliation step, which structurally needs `/account/api-usage` and must block **enablement** (not delivery) until that route works. See `_orchestra/260709_2141_paris-hunter/workdir/v2-recon-260725/v2-viability-260725.md` §4 for the ordered first-steps sequence.
 
 ## Cutover sketch
 
@@ -191,3 +197,7 @@ The beta bug list, including the account-auth failures, was sent to Stream Estat
 - **One-shot signing key:** the webhook signing key is returned only once at destination creation. Persist it immediately or it is lost; recovery means rotation, with operational consequences for in-flight retries.
 - **Mandatory reseed:** changing the canonical search body to V2 changes `configRev`; the alert ID also changes. Watermark validation therefore fails closed automatically. This is correct—reseed and mint a new watermark before enabling V2.
 - **No cross-version dedup:** V1 and V2 IDs differ, so `se:<v1 uuid>` cannot suppress `se:<v2 property id>`. Control duplication with a short overlap and the V2 watermark, not an assumed ID mapping.
+- **Price-change webhooks carry no price fields (confirmed 2026-07-25):** V2 `PRICE_CHANGED` deliveries have no old/new/delta price values, only a threshold flag. The `skip:price_increase` local logic isn't implementable as-is; rely on alert-side `thresholdDirection: "DECREASE"` instead.
+- **No event-created timestamp (confirmed 2026-07-25):** V2 webhooks expose only the delivery/signing time (`X-Webhook-Timestamp`), not when the match/event occurred. The provider needs an explicit logical-time policy; do not treat signing time as event time.
+- **GeoJSON coordinate order (confirmed 2026-07-25):** V2 `location.geometry.coordinates` is `[lon, lat]` (GeoJSON order), versus V1's named `{lat, lon}`. Normalization must swap/parse accordingly or listings will be mis-located.
+- **Reactivation replays everything (confirmed 2026-07-25):** `POST /account/event-destinations/{id}/reactivate` replays ALL notifications suspended during the outage. It must remain an explicit operator action, never automatic, to avoid a delivery flood.
