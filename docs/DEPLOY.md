@@ -350,6 +350,17 @@ assumptions — and since VENDOR-CONFIRMED in writing (2026-07-13): billing is p
 - `seed.js` is the ONLY code path that polls a billable endpoint; the receiver only ingests
   pushed webhooks and `bootstrap.js`/`budget.js` touch `/searches` management endpoints only.
 
+**Account suspension — a separate failure mode from the budget ceiling (incident 2026-07-12):**
+when the Stream Estate account balance goes negative, Stream Estate **suspends API access AND
+webhook delivery together as a single account-level flag**. Critically, topping the balance back
+up does **not** auto-clear the suspension — you may need to email support@stream.estate to lift
+it. Real incident: a seed overspend drove the balance negative, the account was suspended, and
+webhooks silently stopped for ~2 weeks even though the balance was reset the next day and the
+saved search still read `notificationEnabled: true`. Operational rule: **keep the balance
+comfortably positive at all times.** Note the limitation: `PH_MONTHLY_ITEM_BUDGET` above guards
+against runaway *overspend*, but it cannot detect or clear an *account-level suspension* — if the
+group goes silent despite a healthy config, work through §7ter.
+
 ## 7bis. Changing search parameters later
 
 The env-driven search parameters (`PH_ZIPS`, `PH_BUDGET_HC_MIN`/`MAX`, `PH_SERVER_BUDGET_MIN`/`MAX`,
@@ -384,6 +395,62 @@ Notes:
   time, so only listings published after step 4 notify.
 - Code-level knobs — hard exclusions (`exclusions.js`), scoring thresholds (`scoring.js`), the
   cap table (`capTable.js`) — are code+test changes shipped as a normal upgrade (§6), NOT env.
+
+**Vendor-confirmed criteria facts (tuning guidance)** — useful when deciding whether to widen a
+search:
+
+- `furnished: false` drops ONLY adverts explicitly tagged furnished — undeclared/null `furnished`
+  listings are KEPT. It is not over-filtering.
+- `budgetMin`/`budgetMax` are matched against the **advertised rent, usually the
+  charges-comprises (CC) figure** — so `PH_SERVER_BUDGET_MAX` (default 3350) behaves like a CC
+  ceiling. Raising it widens the pool: listings whose hors-charges rent is in-budget but whose CC
+  exceeds the ceiling are currently dropped upstream, before they ever reach the local filter.
+  Keep the strict HC decision in the local filter regardless of where the server ceiling is set.
+
+## 7ter. "Zero notifications" troubleshooting
+
+When the group goes silent and you suspect the webhook isn't firing, run this sequence before
+assuming a quiet market:
+
+1. **Read back the live search config from the Stream Estate API:**
+
+   ```bash
+   curl -s https://api.stream.estate/searches -H "X-API-KEY: $STREAM_ESTATE_API_KEY" | jq
+   ```
+
+   Confirm `notificationEnabled: true` AND `endpointRecipient` is set to your `…/match` URL —
+   that pair is the *match* webhook. If only `eventEndpoint`+`subscribedEvents` are set, that's
+   the *advert-events* webhook (price changes only), not new matches.
+
+2. **Query `stream_estate_inbox` on the VPS** (readonly):
+
+   ```bash
+   docker exec -i -w /fredy paris-hunter-fredy-1 node --input-type=module - <<'EOF'
+   import Database from 'better-sqlite3';
+   const db = new Database('/db/listings.db', { readonly: true });
+   console.table(
+     db.prepare('SELECT kind, decision, COUNT(*) n FROM stream_estate_inbox GROUP BY kind, decision').all(),
+   );
+   EOF
+   ```
+
+   Distinguish real deliveries from self-tests: `/webhook-tester` sample payloads (§8) reference
+   a DIFFERENT search id and are demo data — exclude them. Count genuine `kind=match` rows and
+   their `decision`.
+
+3. **Grep the Caddy forensic log** for the webhook path (`/data/access.json` in the caddy
+   container) — check source IP and status:
+
+   ```bash
+   docker exec paris-hunter-caddy-1 grep '/api/webhook/stream-estate' /data/access.json | tail -50
+   ```
+
+   This rules out the IP allowlist (`144.76.91.183` today, §8) silently 403-ing real deliveries.
+   Zero webhook-path requests at all means nothing was even attempted at the edge.
+
+4. **Conclude:** config correct (step 1) + the endpoint returns 200 to their infra (step 3) +
+   zero real deliveries (step 2) → the gap is on Stream Estate's side (matching/coverage, or an
+   account suspension — §7). Contact support with your search id and endpoint URL.
 
 ## 8. Webhook reachability check (go-live E.4)
 
