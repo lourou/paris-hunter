@@ -72,6 +72,8 @@ describe('POST /email/:secret/alert', () => {
   it('replies 404 for a wrong same-length secret without inserting', async () => {
     const res = await post({ secret: 'e'.repeat(48) });
     expect(res.statusCode).toBe(404);
+    // Same opaque empty 404 the token-mismatch path returns (indistinguishable).
+    expect(res.body).toBe('');
     expect(inboxRows()).toHaveLength(0);
   });
 
@@ -81,17 +83,19 @@ describe('POST /email/:secret/alert', () => {
     expect(inboxRows()).toHaveLength(0);
   });
 
-  it('replies 401 when the email token header is missing', async () => {
+  it('replies with an identical 404 when the email token header is missing', async () => {
     const res = await post({ token: null });
-    expect(res.statusCode).toBe(401);
-    expect(res.json()).toEqual({ ok: false });
+    // Uniform with the secret-mismatch 404: a missing token must not reveal that
+    // the path secret was valid.
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toBe('');
     expect(inboxRows()).toHaveLength(0);
   });
 
-  it('replies 401 for a wrong email token', async () => {
+  it('replies with an identical 404 for a wrong email token', async () => {
     const res = await post({ token: 'b'.repeat(40) });
-    expect(res.statusCode).toBe(401);
-    expect(res.json()).toEqual({ ok: false });
+    expect(res.statusCode).toBe(404);
+    expect(res.body).toBe('');
     expect(inboxRows()).toHaveLength(0);
   });
 
