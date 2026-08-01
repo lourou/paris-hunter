@@ -27,7 +27,7 @@
 				level_format upper
 			}
 			fields {
-				request>uri regexp /api/webhook/stream-estate/[^/]+ /api/webhook/stream-estate/<redacted>
+				request>uri regexp "/api/webhook/(stream-estate|email)/[^/]+" "/api/webhook/$1/<redacted>"
 				request>headers delete
 				request>tls delete
 				request>proto delete
@@ -50,7 +50,7 @@
 		format filter {
 			wrap json
 			fields {
-				request>uri regexp /api/webhook/stream-estate/[^/]+ /api/webhook/stream-estate/<redacted>
+				request>uri regexp "/api/webhook/(stream-estate|email)/[^/]+" "/api/webhook/$1/<redacted>"
 			}
 		}
 	}
@@ -85,6 +85,19 @@ fredy.example.com {
 		remote_ip private_ranges
 	}
 	handle @webhook_health {
+		reverse_proxy fredy:9998
+	}
+
+	# --- SeLoger email webhook (Increment 1) -------------------------------
+	# One factor here: the unguessable secret path segment + the X-PH-Email-Token
+	# header, BOTH checked in-app (uniform 404 on mismatch). Deliberately NO
+	# remote_ip allowlist: Cloudflare Email Workers egress from a wide, shifting
+	# IP range, so an allowlist is impractical here. Must sort BEFORE the
+	# @webhook_denied catch-all below (handle blocks match in file order).
+	@webhook_email {
+		path_regexp ph_email_delivery ^/api/webhook/email/[^/]+/alert$
+	}
+	handle @webhook_email {
 		reverse_proxy fredy:9998
 	}
 
