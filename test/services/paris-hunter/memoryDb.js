@@ -5,8 +5,8 @@
 
 /**
  * paris-hunter test helper: a REAL better-sqlite3 in-memory database exposing
- * the SqliteConnection static API, with migration 22 applied. Lane-2 tests
- * exercise true transactional semantics (CAS completion, per-row atomic
+ * the SqliteConnection static API, with migrations 22 and 23 applied. Lane-2
+ * tests exercise true transactional semantics (CAS completion, per-row atomic
  * decision tx) instead of SQL-string assertions.
  *
  * Usage (per test file):
@@ -17,10 +17,12 @@
 
 import Database from 'better-sqlite3';
 import { up } from '../../../lib/services/storage/migrations/sql/22.paris-hunter.js';
+import { up as upEmailInbox } from '../../../lib/services/storage/migrations/sql/23.email-inbox.js';
 
 export const createMemorySqlite = () => {
   const db = new Database(':memory:');
   up(db);
+  upEmailInbox(db);
   return {
     raw: db,
     getConnection: () => db,
