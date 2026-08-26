@@ -19,6 +19,7 @@ import { checkAndAddEntry, initSimilarityCache } from '../../lib/services/simila
 
 const fixture = JSON.parse(readFileSync(new URL('../testFixtures/allowa.json', import.meta.url), 'utf-8'));
 const KEEPER_REF = 'crafted-keeper-75011';
+const SUBURB_REF = 'crafted-keeper-93400';
 
 /**
  * Finds a fixture record by its Allowa reference.
@@ -65,7 +66,7 @@ afterEach(() => {
 });
 
 describe('Allowa provider offline poll', () => {
-  it('exposes getListings, requests the fixed API search, and returns every raw fixture row', async () => {
+  it('exposes getListings, requests the configured city search, and returns every raw fixture row', async () => {
     expect(typeof provider.config.getListings).toBe('function');
 
     const raws = await provider.config.getListings();
@@ -74,7 +75,13 @@ describe('Allowa provider offline poll', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     const [input, options] = fetch.mock.calls[0];
     const url = new URL(String(input));
-    expect(url.searchParams.getAll('cities[]')).toEqual(['Paris']);
+    expect(url.searchParams.getAll('cities[]')).toEqual([
+      'Paris',
+      'Pantin',
+      'Saint-Ouen-sur-Seine',
+      'Vincennes',
+      'Le Pré-Saint-Gervais',
+    ]);
     expect(url.searchParams.get('category')).toBe('Location');
     expect(url.searchParams.getAll('numberOfRooms[]')).toEqual(['3', '4', '5']);
     expect(url.searchParams.getAll('nature[]')).toEqual(['Appartement']);
@@ -107,8 +114,10 @@ describe('Allowa provider offline poll', () => {
     expect(listing.ph.photoUrls[0]).toBe(raw.LienImage1__c);
   });
 
-  it('keeps only the valid candidate and drops each isolated filter case', () => {
+  it('keeps the Paris and suburb keepers and drops each isolated filter case', () => {
     expect(provider.config.filter(provider.config.normalize(fixtureByRef(KEEPER_REF)))).toBe(true);
+    // Whole-commune suburb (Saint-Ouen-sur-Seine 93400) allowed via allowaExtraZips.
+    expect(provider.config.filter(provider.config.normalize(fixtureByRef(SUBURB_REF)))).toBe(true);
     expect(provider.config.filter(provider.config.normalize(fixtureByRef('crafted-rooms-band')))).toBe(false);
     expect(provider.config.filter(provider.config.normalize(fixtureByRef('crafted-over-budget')))).toBe(false);
     expect(provider.config.filter(provider.config.normalize(fixtureByRef('crafted-furnished')))).toBe(false);
@@ -117,11 +126,12 @@ describe('Allowa provider offline poll', () => {
     expect(provider.config.filter(provider.config.normalize(fixtureByRef('ref-012333paris21220')))).toBe(false);
   });
 
-  it('atomically records the keeper in ph_seen and convos_outbox only', async () => {
+  it('atomically records both keepers in ph_seen and convos_outbox only', async () => {
     await provider.config.getListings();
 
     const outbox = outboxRows();
-    expect(outbox).toHaveLength(1);
+    expect(outbox).toHaveLength(2);
+    // id ASC → the 75011 Paris keeper sorts before the 93400 suburb keeper.
     expect(outbox[0]).toMatchObject({
       id: `allowa:${KEEPER_REF}`,
       dedup_key: `allowa:${KEEPER_REF}`,
@@ -129,7 +139,12 @@ describe('Allowa provider offline poll', () => {
     });
     expect(outbox[0].text).toContain('Appartement familial 3 pièces');
     expect(outbox[0].image_url).toBe(fixtureByRef(KEEPER_REF).LienImage1__c);
-    expect(seenRows()).toEqual([expect.objectContaining({ dedup_key: `allowa:${KEEPER_REF}` })]);
+    expect(outbox[1]).toMatchObject({
+      id: `allowa:${SUBURB_REF}`,
+      dedup_key: `allowa:${SUBURB_REF}`,
+      kind: 'match',
+    });
+    expect(seenRows().map((row) => row.dedup_key)).toEqual([`allowa:${KEEPER_REF}`, `allowa:${SUBURB_REF}`]);
 
     const excludedKeys = [
       'crafted-zip-75017',
@@ -141,24 +156,26 @@ describe('Allowa provider offline poll', () => {
     expect(outbox.map((row) => row.dedup_key)).not.toEqual(expect.arrayContaining(excludedKeys));
   });
 
-  it('suppresses an exact cross-source cache match while still marking it seen', async () => {
-    const keeper = provider.config.normalize(fixtureByRef(KEEPER_REF));
-    expect(checkAndAddEntry({ title: keeper.title, address: keeper.address, price: keeper.price })).toBe(false);
+  it('suppresses exact cross-source cache matches while still marking them seen', async () => {
+    for (const reference of [KEEPER_REF, SUBURB_REF]) {
+      const keeper = provider.config.normalize(fixtureByRef(reference));
+      expect(checkAndAddEntry({ title: keeper.title, address: keeper.address, price: keeper.price })).toBe(false);
+    }
 
     await provider.config.getListings();
 
     expect(outboxRows()).toHaveLength(0);
-    expect(seenRows()).toEqual([expect.objectContaining({ dedup_key: `allowa:${KEEPER_REF}` })]);
+    expect(seenRows().map((row) => row.dedup_key)).toEqual([`allowa:${KEEPER_REF}`, `allowa:${SUBURB_REF}`]);
   });
 
-  it('does not create a second outbox row when ph_seen already contains the keeper', async () => {
+  it('does not create duplicate outbox rows when ph_seen already contains the keepers', async () => {
     const first = await provider.config.getListings();
     const second = await provider.config.getListings();
 
     expect(first).toHaveLength(fixture.count);
     expect(second).toHaveLength(fixture.count);
     expect(fetch).toHaveBeenCalledTimes(2);
-    expect(outboxRows()).toHaveLength(1);
-    expect(seenRows()).toHaveLength(1);
+    expect(outboxRows()).toHaveLength(2);
+    expect(seenRows()).toHaveLength(2);
   });
 });
