@@ -7,29 +7,59 @@ import { describe, expect, it } from 'vitest';
 import { findExclusion } from '../../../lib/services/paris-hunter/exclusions.js';
 
 describe('paris-hunter hard exclusions', () => {
-  it.each([
-    ['Appartement meublé', 'meuble'],
-    ['APPARTEMENT MEUBLE', 'meuble'],
-    ['Location Meublée', 'meuble'],
-    ['location meublee', 'meuble'],
-    ['Coloc acceptée', 'coloc'],
-    ['colocation possible', 'coloc'],
-    ['COLOCATIONS ÉTUDIANTES', 'coloc'],
-    ['Bail mobilité uniquement', 'bail mobilite'],
-    ['bail mobilite uniquement', 'bail mobilite'],
-    ['bail-mobilité', 'bail mobilite'],
-    ['Location courte durée', 'courte duree'],
-    ['location courte duree', 'courte duree'],
-    ['COURTE-DURÉE', 'courte duree'],
-    ['Sous-location autorisée', 'sous-location'],
-    ['sous location autorisee', 'sous-location'],
-    ['souslocation temporaire', 'sous-location'],
-    ['Location saisonnière', 'saisonnier'],
-    ['location saisonniere', 'saisonnier'],
-    ['Logement saisonnier', 'saisonnier'],
-    ['offre saisonniere', 'saisonnier'],
-  ])('fails closed for fixture %j', (text, expectedTerm) => {
-    expect(findExclusion(text)).toBe(expectedTerm);
+  describe('furnished exclusions', () => {
+    it.each([
+      ['Appartement meublé', 'meuble'],
+      ['APPARTEMENT MEUBLE', 'meuble'],
+      ['Location Meublée', 'meuble'],
+      ['location meublee', 'meuble'],
+      ['Appartement avec meubles', 'meuble'],
+      ['Avec meubles fournis', 'meuble'],
+      ['Mobilier fourni', 'meuble'],
+      ['Avec mobilier complet', 'meuble'],
+      ['Furnished apartment', 'meuble'],
+      ['FURNISHED', 'meuble'],
+    ])('fails closed for furnished fixture %j', (text, expectedTerm) => {
+      expect(findExclusion(text)).toBe(expectedTerm);
+    });
+  });
+
+  describe('colocation exclusions', () => {
+    it.each([
+      ['Coloc acceptée', 'coloc'],
+      ['colocation possible', 'coloc'],
+      ['COLOCATIONS ÉTUDIANTES', 'coloc'],
+      ['Colocataire recherché', 'coloc'],
+      ['Cherche colocataires', 'coloc'],
+      ['Coliving Paris 11e', 'coloc'],
+      ['COLIVING space', 'coloc'],
+      ['Flat-sharing', 'coloc'],
+      ['Flatshare available', 'coloc'],
+      ['Cohabitation étudiante', 'coloc'],
+      ['Roommate wanted', 'coloc'],
+    ])('fails closed for colocation fixture %j', (text, expectedTerm) => {
+      expect(findExclusion(text)).toBe(expectedTerm);
+    });
+  });
+
+  describe('other exclusions', () => {
+    it.each([
+      ['Bail mobilité uniquement', 'bail mobilite'],
+      ['bail mobilite uniquement', 'bail mobilite'],
+      ['bail-mobilité', 'bail mobilite'],
+      ['Location courte durée', 'courte duree'],
+      ['location courte duree', 'courte duree'],
+      ['COURTE-DURÉE', 'courte duree'],
+      ['Sous-location autorisée', 'sous-location'],
+      ['sous location autorisee', 'sous-location'],
+      ['souslocation temporaire', 'sous-location'],
+      ['Location saisonnière', 'saisonnier'],
+      ['location saisonniere', 'saisonnier'],
+      ['Logement saisonnier', 'saisonnier'],
+      ['offre saisonniere', 'saisonnier'],
+    ])('fails closed for fixture %j', (text, expectedTerm) => {
+      expect(findExclusion(text)).toBe(expectedTerm);
+    });
   });
 
   it.each([
@@ -45,6 +75,18 @@ describe('paris-hunter hard exclusions', () => {
 
   it('still catches another exclusion after removing a furnished negation', () => {
     expect(findExclusion('Appartement non meublé, colocation possible')).toBe('coloc');
+  });
+
+  it('handles sans mobilier (without furniture) negation', () => {
+    expect(findExclusion('Appartement sans mobilier')).toBeNull();
+  });
+
+  it('handles sans meubles negation', () => {
+    expect(findExclusion('Location sans meubles')).toBeNull();
+  });
+
+  it('handles pas de meubles negation', () => {
+    expect(findExclusion('Pas de meubles fournis')).toBeNull();
   });
 
   it('returns the first term in stable rule order for provider decision logging', () => {
