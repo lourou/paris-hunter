@@ -285,6 +285,18 @@ describe('fail-closed hard filters (v2 #9)', () => {
     await expectDecision('match-furnished-true.json', 'excluded:furnished');
   });
 
+  it('colocataire in the text → excluded:coloc', async () => {
+    await expectDecision('match-colocataire.json', 'excluded:coloc');
+  });
+
+  it('coliving in the text → excluded:coloc', async () => {
+    await expectDecision('match-coliving.json', 'excluded:coloc');
+  });
+
+  it('mobilier in the text → excluded:meuble', async () => {
+    await expectDecision('match-mobilier.json', 'excluded:meuble');
+  });
+
   it('priceHc outside the band → excluded:band', async () => {
     await expectDecision('match-out-of-band.json', 'excluded:band');
   });
