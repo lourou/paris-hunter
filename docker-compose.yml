@@ -5,11 +5,16 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ghcr.io/orangecoding/fredy
+    # Load runtime secrets/config from a local .env if present. Marked optional so a
+    # fresh clone without a .env still starts (requires Compose >= v2.24).
+    env_file:
+      - path: .env
+        required: false
     environment:
       - NODE_ENV=production
     volumes:
-      - ./conf:/conf
-      - ./db:/db
+      - fredy-conf:/conf
+      - fredy-db:/db
     ports:
       - "9998:9998"
     restart: unless-stopped
@@ -24,3 +29,16 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
+
+# Persistent SQLite data lives in these external named volumes. They must pre-exist
+# (created on the first deploy, e.g. `docker volume create paris-hunter_fredy-db` and
+# `paris-hunter_fredy-conf`) so data survives container/image rebuilds and is never
+# stranded in an anonymous volume. A fresh/new user can drop `external: true` (and the
+# `name:`) to let Compose create and manage these volumes automatically.
+volumes:
+  fredy-db:
+    external: true
+    name: paris-hunter_fredy-db
+  fredy-conf:
+    external: true
+    name: paris-hunter_fredy-conf
