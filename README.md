@@ -1,9 +1,28 @@
 # paris-hunter
 
-Automated Paris rental hunt for lourou + the group. A thin fork of
-[Fredy](https://github.com/orangecoding/fredy) (merged at upstream `428977e`, v22.9.7)
-that turns Stream Estate saved-search webhooks into scored listing messages in a
-Convos (XMTP) group — first photo as attachment + a French scored summary.
+A thin fork of [Fredy](https://github.com/orangecoding/fredy) (a self-hosted
+real-estate finder for Germany, merged here at upstream `428977e`, v22.9.7),
+specialized for hunting long-term rentals in Paris. It adds French listing
+sources and an XMTP group-chat notifier on top of Fredy's provider +
+notification-adapter architecture. Everything in this fork is additive, so
+upstream rebases stay cheap (see [Fork maintenance](#fork-maintenance) below).
+
+**Sources**
+
+- **Stream Estate** (`lib/provider/streamEstate.js`) — webhook-fed, API-only (no
+  Chromium). Turns saved-search webhooks from an aggregated French listings API
+  (~1,500 sources, Leboncoin among them) with property-level dedup into pipeline
+  input.
+- **Allowa** (`lib/provider/allowa.js`) — polled JSON API covering several
+  inner-ring communes.
+- **SeLoger email ingestion** (`lib/api/routes/emailWebhookRoute.js` +
+  `lib/services/paris-hunter/emailInbox.js`) — SeLoger alert emails forwarded to
+  a webhook (e.g. via a Cloudflare Email Worker, see `tools/paris-hunter/`),
+  parsed into listings.
+
+**Notifications** — a Convos (XMTP) group-chat adapter
+(`lib/notification/adapter/convos.js`): a send-only participant with a durable
+outbox that posts a French scored summary plus the first photo as an attachment.
 
 Target: a matching listing published anywhere → group message in **< 5 minutes**
 (dominated by upstream publication delay). The webhook→message leg is live-QA-proven
@@ -55,6 +74,29 @@ Defaults live in `lib/services/paris-hunter/phConfig.js`; all overridable via
 
 Price-decrease events on a known listing re-notify once, with a distinct
 "⬇️ baisse de prix" format.
+
+## Setup
+
+Node.js >= 22, ESM-only. Copy `.env.example` to `.env` and fill in your own
+values — every variable is documented inline. The placeholders you must set for a
+real deployment include:
+
+- `PUBLIC_BASE_URL` — your public origin, e.g. `https://fredy.example.com`.
+- `STREAM_ESTATE_WEBHOOK_SECRET` — the shared secret in the webhook path segment.
+- `SCW_ACCESS_KEY` / `SCW_SECRET_KEY` / `SCW_DEFAULT_ORGANIZATION_ID`
+  (`<SCW_ORG_ID>`) / `SCW_DEFAULT_PROJECT_ID` (`<SCW_PROJECT_ID>`) — Scaleway
+  object storage for photo attachments.
+- Convos/XMTP identity and group settings for the notifier.
+
+```bash
+yarn install
+yarn start:paris-hunter          # local run (reads .env)
+```
+
+For a production VPS deployment (docker-compose + Caddy with TLS, Tailscale-only
+admin UI, first-boot order, backup/restore) follow `docs/DEPLOY.md`, which uses
+`<HOST>` / `<TAILNET>` / `<VPS_TAILSCALE_IP>` / `fredy.example.com` placeholders
+throughout — substitute your own host, tailnet, IP and domain.
 
 ## Ops
 
@@ -132,3 +174,9 @@ without that log line is a bug.
 - Stream Estate MCP tool for free-form queries in the group.
 - Custom sources for institutional landlord portals (YouFirst/Gecina, CDC Habitat).
 - Optional TanStack Start dashboard, only if the group-chat CRM proves insufficient.
+
+## License
+
+Apache-2.0, inherited from upstream [Fredy](https://github.com/orangecoding/fredy)
+(copyright the Fredy authors). See [`LICENSE`](LICENSE). The upstream README is
+preserved verbatim at [`README-fredy-upstream.md`](README-fredy-upstream.md).

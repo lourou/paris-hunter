@@ -1,6 +1,6 @@
 # paris-hunter — Executive Brief for the Coding Agent
 
-**Mission.** Automated Paris rental hunt for lourou + the group. Pipeline: **Stream Estate (data) → Fredy (engine) → Convos agent (notifications in a group chat)**. Target: a matching listing published anywhere → scored message in the Convos group in **< 5 minutes**. Hard deadline context: current sublet (rue de la Roquette, 11e) ends December 2026; serious hunting starts October.
+**Mission.** Automated Paris rental hunt for a small group. Pipeline: **Stream Estate (data) → Fredy (engine) → Convos agent (notifications in a group chat)**. Target: a matching listing published anywhere → scored message in the Convos group in **< 5 minutes**.
 
 ---
 
@@ -10,7 +10,7 @@
 |---|---|
 | Data source | **Stream Estate** (operates the ex-Melo API): REST + real-time webhooks + MCP server. ~1,500 French sources, ~50k new listings/day, property-level dedup. **Pay-as-you-go** plan (€0.01/item). The Melo web SaaS subscription is NOT part of the pipeline. |
 | Engine | **Fredy** — github.com/orangecoding/fredy (Node.js flat-hunting bot, provider + notification-adapter architecture). Fork or extend. |
-| Notifications | **Convos (XMTP) agent**, running **in-process inside Fredy** as a notification adapter, with its own agent identity, posting to a group chat (lourou + the group + agent). Signal/Hermes, Discord, Telegram: all rejected. |
+| Notifications | **Convos (XMTP) agent**, running **in-process inside Fredy** as a notification adapter, with its own agent identity, posting to a group chat (the group members + agent). Signal/Hermes, Discord, Telegram: all rejected. |
 | Runtime | One long-lived Node process (Fredy + XMTP client). Deploy on Fly.io/Railway/VPS. An earlier Cloudflare Workers pipeline sketch exists in history — **superseded**, ignore it. |
 | Internal repos | The dev agent has read access to closed-source Convos/Ephemera agent repos. **Mine them for patterns** (identity provisioning, group consent/join, rich message format, deployment). Read for inspiration only — never vendor closed-source code into this repo. |
 
